@@ -465,7 +465,7 @@ def _safe_float(val):
 
 
 def read_atua_xls(filepath):
-    """Read ATUA cobrança file (XLS or XLSX)."""
+    """Read ATUA cobrança file (XLS or XLSX). Prioriza LibreOffice."""
     print(f"  Lendo ATUA: {filepath}")
 
     ext = Path(filepath).suffix.lower()
@@ -473,24 +473,7 @@ def read_atua_xls(filepath):
     if ext == '.xlsx':
         return _read_atua_xlsx(filepath)
 
-    # Try xlrd first
-    try:
-        import xlrd
-        wb = xlrd.open_workbook(filepath)
-        ws = wb.sheet_by_index(0)
-        headers = [str(ws.cell_value(0, c)).strip() for c in range(ws.ncols)]
-        records = []
-        for r in range(1, ws.nrows):
-            row_dict = {}
-            for c in range(ws.ncols):
-                row_dict[headers[c]] = ws.cell_value(r, c)
-            records.append(row_dict)
-        print(f"  Colunas ATUA (xlrd): {headers}")
-        return headers, records
-    except ImportError:
-        pass
-
-    # Try libreoffice conversion
+    # Estratégia 1: LibreOffice converte XLS → XLSX (mais robusto)
     try:
         import subprocess, shutil
         temp_dir = '/tmp/atua_convert'
@@ -501,21 +484,36 @@ def read_atua_xls(filepath):
         env['HOME'] = '/tmp'
         result = subprocess.run(
             ['libreoffice', '--headless', '--convert-to', 'xlsx', '--outdir', temp_dir, filepath],
-            capture_output=True, text=True, timeout=30, env=env
+            capture_output=True, text=True, timeout=60, env=env
         )
         xlsx_path = os.path.join(temp_dir, Path(filepath).stem + '.xlsx')
         if os.path.exists(xlsx_path):
             headers, records = _read_atua_xlsx(xlsx_path)
-            expected = {'nr_titulo', 'nr_nf', 'nr_ctrc', 'vl_total', 'vl_frete'}
-            if expected.intersection(set(h.lower().strip() for h in headers)):
-                return headers, records
-            else:
-                print(f"  LibreOffice produziu cabeçalhos inválidos: {headers}")
-                print("  Tentando parser BIFF8...")
+            print(f"  Colunas ATUA (LibreOffice): {headers}")
+            return headers, records
+        else:
+            print(f"  LibreOffice nao gerou arquivo. stdout={result.stdout[:200]} stderr={result.stderr[:200]}")
     except Exception as e:
         print(f"  LibreOffice conversion failed: {e}")
 
-    # Fallback: use custom BIFF parser
+    # Estratégia 2: xlrd com flag ignore_workbook_corruption
+    try:
+        import xlrd
+        wb = xlrd.open_workbook(filepath, ignore_workbook_corruption=True)
+        ws = wb.sheet_by_index(0)
+        headers = [str(ws.cell_value(0, c)).strip() for c in range(ws.ncols)]
+        records = []
+        for r in range(1, ws.nrows):
+            row_dict = {}
+            for c in range(ws.ncols):
+                row_dict[headers[c]] = ws.cell_value(r, c)
+            records.append(row_dict)
+        print(f"  Colunas ATUA (xlrd): {headers}")
+        return headers, records
+    except Exception as e:
+        print(f"  xlrd failed: {e}")
+
+    # Estratégia 3: parser BIFF embutido (último recurso)
     print("  Usando parser BIFF8 embutido...")
     from parse_xls import read_xls
     headers, rows = read_xls(filepath)
