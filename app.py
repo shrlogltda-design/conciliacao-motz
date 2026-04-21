@@ -12,6 +12,7 @@ from pathlib import Path
 from datetime import datetime, timedelta
 import hashlib
 import io
+import sys
 
 # ============================================================
 # Configuração da página
@@ -148,7 +149,7 @@ def rodar_conciliacao(pdfs_bytes, motz_bytes, atua_bytes, motz_name, atua_name):
 
         # Rodar a skill
         cmd = [
-            "python3", str(script_path),
+              sys.executable, str(script_path),
             "--motz", str(motz_path),
             "--atua", str(atua_path),
             "--pdfs", *pdf_paths,
