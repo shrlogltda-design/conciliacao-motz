@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.env
+.DS_Store
+*.log
+
+# Arquivos de teste locais
+uploads/
+outputs/
+test_*.xlsx
