@@ -1,2 +1,4 @@
 libreoffice
 libreoffice-calc
+libjpeg-dev
+zlib1g-dev
