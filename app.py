@@ -1,7 +1,7 @@
 """
-Dashboard de Conciliação MOTZ - Streamlit (v4.0)
+Dashboard de Conciliação MOTZ - Streamlit (v4.1)
 Upload de PDFs Repom + MOTZ (XLSX) + ATUA (XLS) → conciliação → visualização
-v4.0: base histórica acumulativa com deduplicação inteligente
+v4.1: base histórica acumulativa + divergência interna vermelha
 """
 import streamlit as st
 import pandas as pd
@@ -144,6 +144,14 @@ def fmt_rs(n):
 
 
 def colorir_linhas_tabela(df_pd):
+    """
+    Colore CÉLULA POR CÉLULA (igual à planilha MOTZ):
+    - 'Status' e 'Diferença MOTZ×ATUA': cor do status (verde/vermelho/azul/amarelo)
+    - 'Vlr. Saldo': cor do status (como na planilha)
+    - 'Situação Saldo': ROXO se "Aberto"
+    - 'Diverg. Interna (Quebra/descontos) MOTZ': VERMELHO se diferente de zero
+    - Outras colunas: sem fundo
+    """
     def _pintar(coluna, row):
         status = str(row.get("Status", "")).strip().upper()
         sit_saldo = str(row.get("Situação Saldo", "")).strip().lower()
@@ -164,8 +172,20 @@ def colorir_linhas_tabela(df_pd):
         if coluna == "Situação Saldo" and saldo_aberto:
             c = COLORS["SALDO ABERTO"]
             return f"background-color: {c['bg']}; color: {c['fg']}; font-weight: 500;"
+
+        if coluna == "Diverg. Interna (Quebra/descontos) MOTZ":
+            valor_diverg = row.get("Diverg. Interna (Quebra/descontos) MOTZ")
+            if valor_diverg is not None and pd.notna(valor_diverg):
+                try:
+                    if abs(float(valor_diverg)) > 0.01:
+                        c = COLORS["ATUA MAIOR"]
+                        return f"background-color: {c['bg']}; color: {c['fg']}; font-weight: 500;"
+                except (ValueError, TypeError):
+                    pass
+
         if c_status and coluna in ("Status", "Diferença MOTZ×ATUA", "Vlr. Saldo"):
             return f"background-color: {c_status['bg']}; color: {c_status['fg']}; font-weight: 500;"
+
         return ""
 
     def _estilo(row):
@@ -570,7 +590,6 @@ if rodar_btn and pdfs and motz and atua:
             )
             st.session_state["log"] = log
 
-            # Relatório de mesclagem
             if df_base_atual is None or len(df_base_atual) == 0:
                 st.success(f"✓ Base inicial criada · {stats['total']} transferências")
             else:
@@ -596,7 +615,6 @@ if "df" in st.session_state:
     if "status_click" not in st.session_state:
         st.session_state["status_click"] = None
 
-    # Cabeçalho do dashboard
     col_a, col_b = st.columns([3, 1])
     with col_a:
         st.caption(f"🟢 {st.session_state.get('origem', '')}")
@@ -618,7 +636,6 @@ if "df" in st.session_state:
         icon="ℹ️",
     )
 
-    # Filtros
     with st.container(border=True):
         datas_validas = df["Data Emissão"].dropna()
         if len(datas_validas) > 0:
@@ -692,7 +709,6 @@ if "df" in st.session_state:
         )
         df_f = df_f[mask]
 
-    # KPIs
     total_linhas = len(df_periodo)
     df_unicos = df_periodo.drop_duplicates(subset=["Contrato"]) if total_linhas > 0 else df_periodo
     total = len(df_unicos)
@@ -724,7 +740,6 @@ if "df" in st.session_state:
     with col_k5:
         st.metric("Saldo em aberto", fmt_mi(soma_saldo_aberto), f"{aberto_n} contratos")
 
-    # Distribuição clicável
     st.markdown("### Distribuição por status")
     st.caption("👆 Clique em um card ou numa fatia do gráfico para filtrar a tabela. Clique de novo para limpar.")
 
@@ -816,7 +831,6 @@ if "df" in st.session_state:
         else:
             st.caption("Sem dados de data para o período")
 
-    # Tabela 22 colunas + multi-select
     st.markdown(f"**Transferências · {len(df_f)} linhas exibidas** " +
                 (f"(filtro: {filtro_ativo})" if filtro_ativo and filtro_ativo != "Todos" else ""))
 
@@ -890,6 +904,7 @@ if "df" in st.session_state:
         - <span class="status-menor">🔵 ATUA MAIOR até R$100 / ATUA MENOR</span> — mesmas colunas em azul
         - <span class="status-ne">🟡 NÃO ENCONTRADO</span> — mesmas colunas em amarelo
         - <span class="status-aberto">🟣 Situação Saldo = Aberto</span> — apenas a coluna **Situação Saldo** em roxo
+        - <span class="status-maior">🔴 Diverg. Interna ≠ 0</span> — coluna de divergência em vermelho
         """, unsafe_allow_html=True)
 
     csv = df_f.to_csv(index=False).encode("utf-8")
@@ -908,10 +923,14 @@ else:
     )
     with st.expander("ℹ️ Sobre esta ferramenta"):
         st.markdown("""
-        **Novidades v4.0:**
-        - 📚 **Base Histórica Acumulativa** — mantenha dados de vários meses juntos
-        - 🔄 **Mesclagem inteligente** — ignora duplicados, adiciona apenas o que é novo
-        - 💾 **Baixar/Compartilhar** base completa em XLSX a qualquer momento
+        **Novidades v4.1:**
+        - 🐛 **Fix bug NFs com vírgula** — ATUA com "17272, 17271" agora dá match
+        - 🔴 **Divergência Interna em vermelho** — qualquer valor ≠ 0 destacado
+
+        **v4.0 - Base Histórica:**
+        - 📚 Base Histórica Acumulativa — mantenha dados de vários meses juntos
+        - 🔄 Mesclagem inteligente — ignora duplicados, adiciona apenas o que é novo
+        - 💾 Baixar/Compartilhar base completa em XLSX
         - 🗑️ Limpar base quando precisar recomeçar
 
         **Anteriores:**
@@ -924,4 +943,4 @@ else:
         """)
 
 st.divider()
-st.caption("Dashboard Conciliação MOTZ · skill conciliacao-motz · Streamlit Cloud · v4.0 (base histórica acumulativa)")
+st.caption("Dashboard Conciliação MOTZ · skill conciliacao-motz · Streamlit Cloud · v4.1 (fix NFs + diverg vermelha)")
