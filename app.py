@@ -328,4 +328,311 @@ if rodar_btn and pdfs and motz and atua:
             st.success(f"✓ Conciliação concluída · {len(df)} transferências")
         except Exception as e:
             st.error(f"Erro na conciliação:\n\n{str(e)}")
-            st.stop()
+            st.stop()# ============================================================
+# Dashboard
+# ============================================================
+if "df" in st.session_state:
+    df = st.session_state["df"]
+    st.divider()
+
+    if "status_click" not in st.session_state:
+        st.session_state["status_click"] = None
+
+    col_a, col_b = st.columns([3, 1])
+    with col_a:
+        st.caption(f"🟢 {st.session_state.get('origem', '')}")
+    with col_b:
+        if "xlsx_bytes" in st.session_state:
+            st.download_button(
+                "⬇️ Baixar XLSX consolidado",
+                data=st.session_state["xlsx_bytes"],
+                file_name=f"conciliacao_motz_{datetime.now().strftime('%Y-%m-%d')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+
+    st.info(
+        "**1 linha por transferência Repom** — igual à planilha da skill. "
+        "Se um contrato teve 2 transferências (ex: adto + saldo), aparece 2 vezes. "
+        "As colunas coloridas destacam divergências e saldo em aberto.",
+        icon="ℹ️",
+    )
+
+    # Filtros
+    with st.container(border=True):
+        datas_validas = df["Data Emissão"].dropna()
+        if len(datas_validas) > 0:
+            date_min = datas_validas.min().date()
+            date_max = datas_validas.max().date()
+        else:
+            date_min = date_max = datetime.now().date()
+
+        col_f1, col_f2, col_f3, col_f4 = st.columns([1, 1, 1, 2])
+        with col_f1:
+            date_from = st.date_input("De", value=date_min, min_value=date_min, max_value=date_max)
+        with col_f2:
+            date_to = st.date_input("Até", value=date_max, min_value=date_min, max_value=date_max)
+        with col_f3:
+            status_filter = st.selectbox(
+                "Status",
+                ["Todos", "OK", "ATUA MAIOR", "ATUA MENOR", "NÃO ENCONTRADO", "Saldo aberto"],
+                key="status_dropdown",
+            )
+        with col_f4:
+            busca = st.text_input("Buscar", placeholder="contrato, CTRC, motorista, NFe...")
+
+    # Aplicar filtros de data
+    df_f = df.copy()
+    if date_from:
+        df_f = df_f[df_f["Data Emissão"].apply(lambda d: pd.isna(d) or d.date() >= date_from)]
+    if date_to:
+        df_f = df_f[df_f["Data Emissão"].apply(lambda d: pd.isna(d) or d.date() <= date_to)]
+
+    df_periodo = df_f.copy()
+
+    filtro_ativo = st.session_state.get("status_click")
+    if status_filter != "Todos":
+        filtro_ativo = status_filter
+
+    if filtro_ativo == "Saldo aberto":
+        df_f = df_f[df_f["Situação Saldo"] == "Aberto"]
+    elif filtro_ativo and filtro_ativo != "Todos":
+        df_f = df_f[df_f["Status"] == filtro_ativo]
+
+    if busca:
+        b = busca.lower()
+        mask = (
+            df_f["Contrato"].astype(str).str.lower().str.contains(b, na=False) |
+            df_f["nr_ctrc ATUA"].astype(str).str.lower().str.contains(b, na=False) |
+            df_f["Motorista"].astype(str).str.lower().str.contains(b, na=False) |
+            df_f["TITULO (NFe)"].astype(str).str.lower().str.contains(b, na=False) |
+            df_f["Cliente"].astype(str).str.lower().str.contains(b, na=False) |
+            df_f["Nº Carta Frete"].astype(str).str.lower().str.contains(b, na=False) |
+            df_f["Nº Romaneio"].astype(str).str.lower().str.contains(b, na=False)
+        )
+        df_f = df_f[mask]
+
+    # ============================================================
+    # KPIs (deduplica por contrato para somas)
+    # ============================================================
+    total_linhas = len(df_periodo)
+    df_unicos = df_periodo.drop_duplicates(subset=["Contrato"]) if total_linhas > 0 else df_periodo
+    total = len(df_unicos)
+
+    ok_n = (df_unicos["Status"] == "OK").sum()
+    maior_n = (df_unicos["Status"] == "ATUA MAIOR").sum()
+    menor_n = (df_unicos["Status"] == "ATUA MENOR").sum()
+    ne_n = (df_unicos["Status"] == "NÃO ENCONTRADO").sum()
+    aberto_n = (df_unicos["Situação Saldo"] == "Aberto").sum()
+
+    soma_motz = df_unicos["Vlr. Frete Líquido"].fillna(0).sum()
+    soma_atua = df_unicos["vl_total ATUA"].fillna(0).sum()
+    soma_transf = df_periodo["Valor Transferido"].fillna(0).sum()
+    contratos_com_transf = df_periodo[df_periodo["Valor Transferido"].fillna(0) > 0]["Contrato"].nunique()
+    soma_saldo_aberto = df_unicos[df_unicos["Situação Saldo"] == "Aberto"]["Vlr. Saldo"].fillna(0).sum()
+
+    indice = (ok_n / total * 100) if total else 0
+
+    col_k1, col_k2, col_k3, col_k4, col_k5 = st.columns(5)
+    with col_k1:
+        st.metric("Índice conciliação", f"{indice:.1f}%".replace(".", ","), f"{ok_n} de {total} OK")
+    with col_k2:
+        st.metric("Soma MOTZ", fmt_mi(soma_motz), help="Frete líquido (sem duplicar por transferência)")
+    with col_k3:
+        diff = soma_atua - soma_motz
+        st.metric("Soma ATUA", fmt_mi(soma_atua), delta=fmt_mi(diff), delta_color="inverse")
+    with col_k4:
+        st.metric("Transferido Repom", fmt_mi(soma_transf), f"{contratos_com_transf} contratos c/ PDF")
+    with col_k5:
+        st.metric("Saldo em aberto", fmt_mi(soma_saldo_aberto), f"{aberto_n} contratos")
+
+    # ============================================================
+    # Distribuição clicável (cards + pizza)
+    # ============================================================
+    st.markdown("### Distribuição por status")
+    st.caption("👆 Clique em um card ou numa fatia do gráfico para filtrar a tabela. Clique de novo para limpar.")
+
+    def pct(n):
+        return f"{n/total*100:.1f}%".replace(".", ",") if total else "0,0%"
+
+    cards = [
+        ("OK", ok_n, "card-ok", "🟢"),
+        ("ATUA MAIOR", maior_n, "card-maior", "🔴"),
+        ("ATUA MENOR", menor_n, "card-menor", "🔵"),
+        ("NÃO ENCONTRADO", ne_n, "card-ne", "🟡"),
+        ("Saldo aberto", aberto_n, "card-aberto", "🟣"),
+    ]
+    cols_cards = st.columns(5)
+    filtro_atual_clique = st.session_state.get("status_click")
+    for idx, (label, n, css_class, emoji) in enumerate(cards):
+        with cols_cards[idx]:
+            ativo = (filtro_atual_clique == label)
+            classe_final = f"{css_class} card-active" if ativo else css_class
+            st.markdown(f'<div class="{classe_final}">', unsafe_allow_html=True)
+            if st.button(f"{emoji}  **{label}**\n\n{n} · {pct(n)}", key=f"card_{label}", use_container_width=True):
+                if st.session_state.get("status_click") == label:
+                    st.session_state["status_click"] = None
+                else:
+                    st.session_state["status_click"] = label
+                st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
+
+    if filtro_atual_clique and status_filter == "Todos":
+        st.markdown(
+            f'<div class="filter-hint">🎯 Filtro ativo pelo card: <b>{filtro_atual_clique}</b> '
+            f'· Exibindo {len(df_f)} de {total_linhas} linhas. Clique no mesmo card para limpar.</div>',
+            unsafe_allow_html=True,
+        )
+
+    col_g1, col_g2 = st.columns([1, 1])
+    with col_g1:
+        st.markdown("**Distribuição visual**")
+        dist_data = pd.DataFrame([
+            {"Status": "OK", "Qtd": ok_n, "Cor": COLORS["OK"]["plot"]},
+            {"Status": "ATUA MAIOR", "Qtd": maior_n, "Cor": COLORS["ATUA MAIOR"]["plot"]},
+            {"Status": "ATUA MENOR", "Qtd": menor_n, "Cor": COLORS["ATUA MENOR"]["plot"]},
+            {"Status": "NÃO ENCONTRADO", "Qtd": ne_n, "Cor": COLORS["NAO ENCONTRADO"]["plot"]},
+            {"Status": "Saldo aberto", "Qtd": aberto_n, "Cor": COLORS["SALDO ABERTO"]["plot"]},
+        ])
+        dist_data = dist_data[dist_data["Qtd"] > 0]
+        if len(dist_data) > 0:
+            fig = px.pie(
+                dist_data, values="Qtd", names="Status", color="Status",
+                color_discrete_map={r["Status"]: r["Cor"] for _, r in dist_data.iterrows()},
+                hole=0.4,
+            )
+            fig.update_traces(
+                textposition="inside",
+                textinfo="percent+label",
+                hovertemplate="<b>%{label}</b><br>%{value} contratos<br>%{percent}<extra></extra>",
+                pull=[0.08 if s == filtro_atual_clique else 0 for s in dist_data["Status"]],
+            )
+            fig.update_layout(
+                height=280,
+                margin=dict(t=10, b=10, l=10, r=10),
+                showlegend=True,
+                legend=dict(orientation="v", yanchor="middle", y=0.5, xanchor="left", x=1.05, font=dict(size=11)),
+            )
+            evento = st.plotly_chart(fig, use_container_width=True, on_select="rerun", key="pie_chart")
+            if evento and evento.get("selection") and evento["selection"].get("points"):
+                ponto = evento["selection"]["points"][0]
+                status_clicado = ponto.get("label")
+                if status_clicado:
+                    if st.session_state.get("status_click") == status_clicado:
+                        st.session_state["status_click"] = None
+                    else:
+                        st.session_state["status_click"] = status_clicado
+                    st.rerun()
+        else:
+            st.caption("Sem dados para plotar")
+
+    with col_g2:
+        st.markdown("**Frete líquido emitido por dia**")
+        df_chart = df_unicos.dropna(subset=["Data Emissão"]).copy()
+        if len(df_chart) > 0:
+            df_chart["Dia"] = df_chart["Data Emissão"].dt.date
+            daily = df_chart.groupby("Dia")["Vlr. Frete Líquido"].sum().reset_index()
+            daily.columns = ["Data", "Frete Líquido"]
+            st.bar_chart(daily, x="Data", y="Frete Líquido", height=280, color="#378ADD")
+        else:
+            st.caption("Sem dados de data para o período")
+
+    # ============================================================
+    # Tabela com 22 colunas + multi-select
+    # ============================================================
+    st.markdown(f"**Transferências · {len(df_f)} linhas exibidas** " +
+                (f"(filtro: {filtro_ativo})" if filtro_ativo and filtro_ativo != "Todos" else ""))
+
+    PADRAO_VISIVEIS = [
+        "Cliente", "Contrato", "TITULO (NFe)", "Motorista",
+        "Data Emissão", "Vlr. Frete Líquido", "Vlr. Saldo",
+        "vl_total ATUA", "Diferença MOTZ×ATUA", "Status",
+        "Data Transferência", "Valor Transferido",
+        "Situação Adto", "Situação Saldo",
+    ]
+
+    with st.expander("⚙️ Escolher colunas visíveis", expanded=False):
+        colunas_escolhidas = st.multiselect(
+            "Selecione as colunas que deseja ver (todas as 22 disponíveis):",
+            options=COLUNAS_OFICIAIS,
+            default=PADRAO_VISIVEIS,
+            key="colunas_multiselect",
+        )
+        col_rst1, col_rst2, _ = st.columns([1, 1, 3])
+        with col_rst1:
+            if st.button("✅ Mostrar todas"):
+                st.session_state["colunas_multiselect"] = COLUNAS_OFICIAIS
+                st.rerun()
+        with col_rst2:
+            if st.button("↺ Padrão"):
+                st.session_state["colunas_multiselect"] = PADRAO_VISIVEIS
+                st.rerun()
+
+    if not colunas_escolhidas:
+        colunas_escolhidas = PADRAO_VISIVEIS
+
+    colunas_ordenadas = [c for c in COLUNAS_OFICIAIS if c in colunas_escolhidas]
+
+    df_show = df_f.copy().sort_values(
+        ["Data Emissão", "Contrato"],
+        ascending=[False, True],
+        na_position="last",
+    )
+    df_tabela = df_show[colunas_ordenadas].reset_index(drop=True)
+
+    formatadores = {}
+    for col in colunas_ordenadas:
+        if col in COLUNAS_VALOR:
+            formatadores[col] = lambda v: (
+                f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                if pd.notna(v) and v != 0 else ("R$ 0,00" if v == 0 else "—")
+            )
+        elif col in COLUNAS_DATA:
+            formatadores[col] = lambda d: d.strftime("%d/%m/%Y") if pd.notna(d) and isinstance(d, datetime) else "—"
+
+    styler = colorir_linhas_tabela(df_tabela)
+    if formatadores:
+        styler = styler.format(formatadores)
+
+    st.dataframe(styler, use_container_width=True, hide_index=True, height=520)
+
+    with st.expander("🎨 Legenda de cores", expanded=False):
+        st.markdown(f"""
+        As cores seguem **exatamente** a planilha MOTZ original (célula por célula):
+
+        - <span class="status-ok">🟢 OK</span> — colunas **Status**, **Diferença MOTZ×ATUA** e **Vlr. Saldo** em verde
+        - <span class="status-maior">🔴 ATUA MAIOR > R$100</span> — mesmas colunas em vermelho (diferença crítica)
+        - <span class="status-menor">🔵 ATUA MAIOR até R$100 / ATUA MENOR</span> — mesmas colunas em azul (diferença pequena)
+        - <span class="status-ne">🟡 NÃO ENCONTRADO</span> — mesmas colunas em amarelo
+        - <span class="status-aberto">🟣 Situação Saldo = Aberto</span> — apenas a coluna **Situação Saldo** em roxo
+
+        Assim você vê ao mesmo tempo: status da conferência MOTZ×ATUA + pendência de saldo.
+        """, unsafe_allow_html=True)
+
+    csv = df_f.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        "⬇️ Baixar tabela filtrada (CSV · todas as colunas)",
+        csv,
+        f"conciliacao_filtrado_{datetime.now().strftime('%Y-%m-%d')}.csv",
+        "text/csv",
+    )
+
+else:
+    st.info(
+        "👆 **Comece subindo os 3 arquivos** (PDFs Repom, MOTZ XLSX, ATUA XLS) e clique em **Rodar conciliação**. Ou use **Carregar XLSX pronto** se você já tem a planilha consolidada gerada.",
+        icon="📤",
+    )
+    with st.expander("ℹ️ Sobre esta ferramenta"):
+        st.markdown("""
+        Este aplicativo executa a skill `conciliacao-motz` diretamente no servidor.
+
+        **Novidades v3.3:**
+        - 📋 1 linha por transferência (igual à planilha original)
+        - 📊 22 colunas oficiais da planilha MOTZ
+        - ⚙️ Multi-select para escolher colunas visíveis
+        - 🎨 Cores célula por célula (Status + Diferença + Vlr. Saldo coloridas, Situação Saldo roxa)
+        - 👆 Cards de status e gráfico de pizza clicáveis
+        """)
+
+st.divider()
+st.caption("Dashboard Conciliação MOTZ · skill conciliacao-motz · Streamlit Cloud · v3.3")
