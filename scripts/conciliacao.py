@@ -289,7 +289,9 @@ def _parse_currency(value_str):
     try:
         return float(s)
     except (ValueError, TypeError):
-        return 0.0def read_motz_xlsx(filepath):
+        return 0.0
+        
+        def read_motz_xlsx(filepath):
     print(f"  Lendo MOTZ: {filepath}")
     wb = openpyxl.load_workbook(filepath, data_only=True)
     ws = wb.active
