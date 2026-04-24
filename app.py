@@ -1,7 +1,7 @@
 """
-Dashboard de Conciliação MOTZ - Streamlit (v3.3)
+Dashboard de Conciliação MOTZ - Streamlit (v3.5)
 Upload de PDFs Repom + MOTZ (XLSX) + ATUA (XLS) → conciliação → visualização
-v3.3: 1 linha por transferência + 22 colunas oficiais + multi-select + cores célula-por-célula
+v3.5: tema dark + logos oficiais + 22 colunas + distribuição clicável
 """
 import streamlit as st
 import pandas as pd
@@ -10,11 +10,17 @@ import tempfile
 import os
 import shutil
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import hashlib
 import io
 import sys
 import plotly.express as px
+
+# Logos (base64) — embutidos pra não depender de arquivos externos
+try:
+    from logos_b64 import LOGO_REPOM, LOGO_MOTZ, LOGO_ATUA
+except ImportError:
+    LOGO_REPOM = LOGO_MOTZ = LOGO_ATUA = ""
 
 st.set_page_config(
     page_title="Conciliação MOTZ",
@@ -24,42 +30,66 @@ st.set_page_config(
 )
 
 COLORS = {
-    "OK":            {"bg": "#D5E8C1", "fg": "#2E5410", "border": "#3B6D11", "plot": "#3B6D11"},
-    "ATUA MAIOR":    {"bg": "#F8CCCC", "fg": "#7A1F1F", "border": "#A32D2D", "plot": "#A32D2D"},
-    "ATUA MENOR":    {"bg": "#CDE3F7", "fg": "#0E4577", "border": "#185FA5", "plot": "#185FA5"},
-    "NAO ENCONTRADO":{"bg": "#FCE9B6", "fg": "#5E3704", "border": "#854F0B", "plot": "#BF7F1C"},
-    "SALDO ABERTO":  {"bg": "#DDD9FB", "fg": "#2A205F", "border": "#3C3489", "plot": "#4B3FB3"},
+    "OK":            {"bg": "#1F4D1A", "fg": "#C3E8A8", "border": "#5AA84A", "plot": "#6BC54C"},
+    "ATUA MAIOR":    {"bg": "#5A1A1A", "fg": "#F5B8B8", "border": "#E05757", "plot": "#E85858"},
+    "ATUA MENOR":    {"bg": "#1A3A5A", "fg": "#B8D8F5", "border": "#5F95D0", "plot": "#5FA0E0"},
+    "NAO ENCONTRADO":{"bg": "#5A3F0F", "fg": "#F5DB9E", "border": "#C08D3A", "plot": "#E0A040"},
+    "SALDO ABERTO":  {"bg": "#3A2F6B", "fg": "#CFC4F5", "border": "#7A6FD0", "plot": "#8B7FE0"},
 }
 
 st.markdown(f"""
 <style>
+    .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"], .main {{
+        background-color: #0E0E0E !important;
+        color: #EAEAEA !important;
+    }}
+    [data-testid="stHeader"] {{ background-color: #0E0E0E !important; }}
+    [data-testid="stSidebar"] {{ background-color: #141414 !important; }}
     .main .block-container {{ padding-top: 2rem; padding-bottom: 3rem; max-width: 1400px; }}
-    h1 {{ font-size: 22px !important; font-weight: 500 !important; margin-bottom: 0 !important; }}
-    h2 {{ font-size: 16px !important; font-weight: 500 !important; }}
-    h3 {{ font-size: 14px !important; font-weight: 500 !important; }}
-    .stMetric {{ background: var(--secondary-background-color); border-radius: 10px; padding: 12px 16px; }}
-    .stMetric label {{ font-size: 12px !important; color: #6B6B66 !important; }}
-    .stMetric [data-testid="stMetricValue"] {{ font-size: 22px !important; font-weight: 500 !important; }}
-    .stDataFrame {{ font-size: 12px; }}
-    [data-testid="stFileUploader"] section {{ border-radius: 10px; padding: 14px; }}
-    .stButton > button {{ border-radius: 8px; font-size: 13px; padding: 6px 14px; }}
+    h1, h2, h3, h4, h5, h6, p, span, label {{ color: #EAEAEA; }}
+    h1 {{ font-size: 22px !important; font-weight: 500 !important; margin-bottom: 0 !important; color: #F5F5F5 !important; }}
+    h2 {{ font-size: 16px !important; font-weight: 500 !important; color: #F0F0F0 !important; }}
+    h3 {{ font-size: 14px !important; font-weight: 500 !important; color: #F0F0F0 !important; }}
+    small, [data-testid="stCaptionContainer"] {{ color: #9A9A9A !important; }}
+    [data-testid="stVerticalBlockBorderWrapper"] > div,
+    div[data-testid="stExpander"] {{ background-color: #1A1A1A !important; border-color: #2A2A2A !important; }}
+    .stMetric, [data-testid="stMetric"] {{ background: #1A1A1A !important; border: 1px solid #2A2A2A; border-radius: 10px; padding: 12px 16px; }}
+    .stMetric label, [data-testid="stMetricLabel"] {{ font-size: 12px !important; color: #9A9A9A !important; }}
+    .stMetric [data-testid="stMetricValue"] {{ font-size: 22px !important; font-weight: 500 !important; color: #F5F5F5 !important; }}
+    .stMetric [data-testid="stMetricDelta"] {{ color: #B0B0B0 !important; }}
+    input, textarea, select,
+    [data-baseweb="input"] > div, [data-baseweb="select"] > div {{
+        background-color: #1A1A1A !important; color: #EAEAEA !important; border-color: #333 !important;
+    }}
+    [data-baseweb="popover"], [data-baseweb="menu"] {{ background-color: #1A1A1A !important; }}
+    [data-testid="stFileUploader"] section {{ background-color: #1A1A1A !important; border: 1px dashed #444 !important; border-radius: 10px; padding: 14px; }}
+    .stDataFrame {{ font-size: 12px; background-color: #1A1A1A !important; }}
+    .stDataFrame [data-testid="stTable"] {{ background-color: #1A1A1A !important; }}
+    .stDataFrame table {{ color: #EAEAEA !important; }}
+    .stDataFrame thead th {{ background-color: #2A2A2A !important; color: #F5F5F5 !important; border-color: #3A3A3A !important; }}
+    .stDataFrame tbody tr {{ background-color: #1A1A1A !important; }}
+    .stDataFrame tbody td {{ border-color: #2A2A2A !important; }}
+    [data-testid="stAlert"] {{ background-color: #1A1A1A !important; color: #EAEAEA !important; border: 1px solid #2A2A2A !important; }}
+    .stButton > button {{ border-radius: 8px; font-size: 13px; padding: 6px 14px; background-color: #2A2A2A; color: #EAEAEA; border: 1px solid #3A3A3A; }}
+    .stButton > button:hover {{ background-color: #3A3A3A; border-color: #4A4A4A; }}
+    .stButton > button[kind="primary"] {{ background-color: #378ADD !important; color: #FFFFFF !important; border-color: #378ADD !important; }}
+    .stButton > button[kind="primary"]:hover {{ background-color: #2970BF !important; }}
+    .stDownloadButton > button {{ background-color: #2A2A2A !important; color: #EAEAEA !important; border: 1px solid #3A3A3A !important; }}
+    hr {{ border-color: #2A2A2A !important; }}
     .status-ok {{ background: {COLORS['OK']['bg']}; color: {COLORS['OK']['fg']}; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 500; }}
     .status-maior {{ background: {COLORS['ATUA MAIOR']['bg']}; color: {COLORS['ATUA MAIOR']['fg']}; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 500; }}
     .status-menor {{ background: {COLORS['ATUA MENOR']['bg']}; color: {COLORS['ATUA MENOR']['fg']}; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 500; }}
     .status-ne {{ background: {COLORS['NAO ENCONTRADO']['bg']}; color: {COLORS['NAO ENCONTRADO']['fg']}; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 500; }}
     .status-aberto {{ background: {COLORS['SALDO ABERTO']['bg']}; color: {COLORS['SALDO ABERTO']['fg']}; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 500; }}
-    div[data-testid="stButton"] > button[kind="secondary"] {{
-        width: 100%; border-radius: 10px; padding: 12px 14px; font-size: 13px; font-weight: 500;
-        text-align: left; border: 1.5px solid transparent; transition: all 0.15s ease; min-height: 62px;
-    }}
-    div[data-testid="stButton"] > button[kind="secondary"]:hover {{ transform: translateY(-1px); box-shadow: 0 2px 6px rgba(0,0,0,0.08); }}
-    .card-ok button {{ background: {COLORS['OK']['bg']} !important; color: {COLORS['OK']['fg']} !important; border-color: {COLORS['OK']['border']}66 !important; }}
-    .card-maior button {{ background: {COLORS['ATUA MAIOR']['bg']} !important; color: {COLORS['ATUA MAIOR']['fg']} !important; border-color: {COLORS['ATUA MAIOR']['border']}66 !important; }}
-    .card-menor button {{ background: {COLORS['ATUA MENOR']['bg']} !important; color: {COLORS['ATUA MENOR']['fg']} !important; border-color: {COLORS['ATUA MENOR']['border']}66 !important; }}
-    .card-ne button {{ background: {COLORS['NAO ENCONTRADO']['bg']} !important; color: {COLORS['NAO ENCONTRADO']['fg']} !important; border-color: {COLORS['NAO ENCONTRADO']['border']}66 !important; }}
-    .card-aberto button {{ background: {COLORS['SALDO ABERTO']['bg']} !important; color: {COLORS['SALDO ABERTO']['fg']} !important; border-color: {COLORS['SALDO ABERTO']['border']}66 !important; }}
-    .card-active button {{ border-width: 2.5px !important; box-shadow: 0 0 0 3px rgba(0,0,0,0.05) !important; }}
-    .filter-hint {{ background: #F5F5F0; border-left: 3px solid #378ADD; padding: 8px 12px; border-radius: 4px; font-size: 12px; color: #4A4A44; margin-bottom: 12px; }}
+    div[data-testid="stButton"] > button[kind="secondary"] {{ width: 100%; border-radius: 10px; padding: 12px 14px; font-size: 13px; font-weight: 500; text-align: left; border: 1.5px solid transparent; transition: all 0.15s ease; min-height: 62px; }}
+    div[data-testid="stButton"] > button[kind="secondary"]:hover {{ transform: translateY(-1px); box-shadow: 0 2px 8px rgba(0,0,0,0.35); }}
+    .card-ok button {{ background: {COLORS['OK']['bg']} !important; color: {COLORS['OK']['fg']} !important; border-color: {COLORS['OK']['border']}88 !important; }}
+    .card-maior button {{ background: {COLORS['ATUA MAIOR']['bg']} !important; color: {COLORS['ATUA MAIOR']['fg']} !important; border-color: {COLORS['ATUA MAIOR']['border']}88 !important; }}
+    .card-menor button {{ background: {COLORS['ATUA MENOR']['bg']} !important; color: {COLORS['ATUA MENOR']['fg']} !important; border-color: {COLORS['ATUA MENOR']['border']}88 !important; }}
+    .card-ne button {{ background: {COLORS['NAO ENCONTRADO']['bg']} !important; color: {COLORS['NAO ENCONTRADO']['fg']} !important; border-color: {COLORS['NAO ENCONTRADO']['border']}88 !important; }}
+    .card-aberto button {{ background: {COLORS['SALDO ABERTO']['bg']} !important; color: {COLORS['SALDO ABERTO']['fg']} !important; border-color: {COLORS['SALDO ABERTO']['border']}88 !important; }}
+    .card-active button {{ border-width: 2.5px !important; box-shadow: 0 0 0 3px rgba(255,255,255,0.12) !important; }}
+    .filter-hint {{ background: #1A2A3A; border-left: 3px solid #378ADD; padding: 8px 12px; border-radius: 4px; font-size: 12px; color: #CFDFEF; margin-bottom: 12px; }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -113,7 +143,6 @@ def fmt_rs(n):
 
 
 def colorir_linhas_tabela(df_pd):
-    """Colore CÉLULA POR CÉLULA (igual à planilha MOTZ)."""
     def _pintar(coluna, row):
         status = str(row.get("Status", "")).strip().upper()
         sit_saldo = str(row.get("Situação Saldo", "")).strip().lower()
@@ -134,10 +163,8 @@ def colorir_linhas_tabela(df_pd):
         if coluna == "Situação Saldo" and saldo_aberto:
             c = COLORS["SALDO ABERTO"]
             return f"background-color: {c['bg']}; color: {c['fg']}; font-weight: 500;"
-
         if c_status and coluna in ("Status", "Diferença MOTZ×ATUA", "Vlr. Saldo"):
             return f"background-color: {c_status['bg']}; color: {c_status['fg']}; font-weight: 500;"
-
         return ""
 
     def _estilo(row):
@@ -180,7 +207,6 @@ def rodar_conciliacao(pdfs_bytes, motz_bytes, atua_bytes, motz_name, atua_name):
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-# Ordem e nomes oficiais das 22 colunas
 COLUNAS_OFICIAIS = [
     "Cliente", "Contrato", "TITULO (NFe)", "nr_ctrc ATUA", "Nº Carta Frete",
     "Motorista", "Nº Romaneio", "Data Emissão",
@@ -201,7 +227,6 @@ COLUNAS_DATA = {"Data Emissão", "Data Emissão Repom", "Data Transferência"}
 
 
 def processar_xlsx(xlsx_bytes):
-    """Lê o XLSX de conciliação preservando 1 linha por transferência."""
     xl = pd.ExcelFile(io.BytesIO(xlsx_bytes))
     sheet = next((s for s in xl.sheet_names if "concilia" in s.lower()), xl.sheet_names[0])
     df = pd.read_excel(io.BytesIO(xlsx_bytes), sheet_name=sheet)
@@ -270,27 +295,69 @@ def processar_xlsx(xlsx_bytes):
 
 
 # ============================================================
-# UPLOAD
+# UPLOAD com logos oficiais
 # ============================================================
 with st.container(border=True):
     st.markdown("### 📂 Arquivos de entrada")
     st.caption("Suba os 3 tipos de arquivo da conciliação. O sistema roda o script da skill e gera a planilha consolidada automaticamente.")
+
     col1, col2, col3 = st.columns(3)
+
     with col1:
-        st.markdown("**PDFs Repom**")
-        pdfs = st.file_uploader("Transferências bancárias", type=["pdf"], accept_multiple_files=True, key="pdfs", label_visibility="collapsed")
+        if LOGO_REPOM:
+            st.markdown(
+                f'<div style="display:flex;align-items:center;justify-content:center;'
+                f'height:60px;background:#FFFFFF;border-radius:8px;padding:6px;margin-bottom:8px;">'
+                f'<img src="{LOGO_REPOM}" style="max-height:48px;max-width:100%;object-fit:contain;"></div>',
+                unsafe_allow_html=True,
+            )
+        st.markdown('<div style="text-align:center;font-weight:500;margin-bottom:4px;">PDFs Repom</div>', unsafe_allow_html=True)
+        pdfs = st.file_uploader(
+            "Transferências bancárias",
+            type=["pdf"],
+            accept_multiple_files=True,
+            key="pdfs",
+            label_visibility="collapsed",
+        )
         if pdfs:
             st.caption(f"✓ {len(pdfs)} PDF(s)")
+
     with col2:
-        st.markdown("**Arquivo MOTZ**")
-        motz = st.file_uploader("export*.xlsx", type=["xlsx"], key="motz", label_visibility="collapsed")
+        if LOGO_MOTZ:
+            st.markdown(
+                f'<div style="display:flex;align-items:center;justify-content:center;'
+                f'height:60px;background:#FFFFFF;border-radius:8px;padding:6px;margin-bottom:8px;">'
+                f'<img src="{LOGO_MOTZ}" style="max-height:48px;max-width:100%;object-fit:contain;"></div>',
+                unsafe_allow_html=True,
+            )
+        st.markdown('<div style="text-align:center;font-weight:500;margin-bottom:4px;">Arquivo MOTZ</div>', unsafe_allow_html=True)
+        motz = st.file_uploader(
+            "export*.xlsx",
+            type=["xlsx"],
+            key="motz",
+            label_visibility="collapsed",
+        )
         if motz:
             st.caption(f"✓ {motz.name}")
+
     with col3:
-        st.markdown("**Cobrança ATUA**")
-        atua = st.file_uploader("*cobranca*.xls", type=["xls", "xlsx"], key="atua", label_visibility="collapsed")
+        if LOGO_ATUA:
+            st.markdown(
+                f'<div style="display:flex;align-items:center;justify-content:center;'
+                f'height:60px;background:#FFFFFF;border-radius:8px;padding:6px;margin-bottom:8px;">'
+                f'<img src="{LOGO_ATUA}" style="max-height:48px;max-width:100%;object-fit:contain;"></div>',
+                unsafe_allow_html=True,
+            )
+        st.markdown('<div style="text-align:center;font-weight:500;margin-bottom:4px;">Cobrança ATUA</div>', unsafe_allow_html=True)
+        atua = st.file_uploader(
+            "*cobranca*.xls",
+            type=["xls", "xlsx"],
+            key="atua",
+            label_visibility="collapsed",
+        )
         if atua:
             st.caption(f"✓ {atua.name}")
+
     col_b1, col_b2, _ = st.columns([1, 1, 3])
     with col_b1:
         rodar_btn = st.button("🔄 Rodar conciliação", type="primary", use_container_width=True, disabled=not (pdfs and motz and atua))
@@ -367,11 +434,28 @@ if "df" in st.session_state:
         else:
             date_min = date_max = datetime.now().date()
 
+        date_min_widget = date(date_min.year - 1, 1, 1)
+        date_max_widget = date(date_max.year + 1, 12, 31)
+
         col_f1, col_f2, col_f3, col_f4 = st.columns([1, 1, 1, 2])
         with col_f1:
-            date_from = st.date_input("De", value=date_min, min_value=date_min, max_value=date_max)
+            date_from = st.date_input(
+                "De",
+                value=date_min,
+                min_value=date_min_widget,
+                max_value=date_max_widget,
+                format="DD/MM/YYYY",
+                key="date_from_input",
+            )
         with col_f2:
-            date_to = st.date_input("Até", value=date_max, min_value=date_min, max_value=date_max)
+            date_to = st.date_input(
+                "Até",
+                value=date_max,
+                min_value=date_min_widget,
+                max_value=date_max_widget,
+                format="DD/MM/YYYY",
+                key="date_to_input",
+            )
         with col_f3:
             status_filter = st.selectbox(
                 "Status",
@@ -379,9 +463,12 @@ if "df" in st.session_state:
                 key="status_dropdown",
             )
         with col_f4:
-            busca = st.text_input("Buscar", placeholder="contrato, CTRC, motorista, NFe...")
+            busca = st.text_input(
+                "Buscar",
+                placeholder="contrato, CTRC, motorista, NFe...",
+                key="busca_input",
+            )
 
-    # Aplicar filtros de data
     df_f = df.copy()
     if date_from:
         df_f = df_f[df_f["Data Emissão"].apply(lambda d: pd.isna(d) or d.date() >= date_from)]
@@ -412,9 +499,7 @@ if "df" in st.session_state:
         )
         df_f = df_f[mask]
 
-    # ============================================================
-    # KPIs (deduplica por contrato para somas)
-    # ============================================================
+    # KPIs (deduplica por contrato)
     total_linhas = len(df_periodo)
     df_unicos = df_periodo.drop_duplicates(subset=["Contrato"]) if total_linhas > 0 else df_periodo
     total = len(df_unicos)
@@ -446,9 +531,7 @@ if "df" in st.session_state:
     with col_k5:
         st.metric("Saldo em aberto", fmt_mi(soma_saldo_aberto), f"{aberto_n} contratos")
 
-    # ============================================================
-    # Distribuição clicável (cards + pizza)
-    # ============================================================
+    # Distribuição clicável
     st.markdown("### Distribuição por status")
     st.caption("👆 Clique em um card ou numa fatia do gráfico para filtrar a tabela. Clique de novo para limpar.")
 
@@ -511,7 +594,10 @@ if "df" in st.session_state:
                 height=280,
                 margin=dict(t=10, b=10, l=10, r=10),
                 showlegend=True,
-                legend=dict(orientation="v", yanchor="middle", y=0.5, xanchor="left", x=1.05, font=dict(size=11)),
+                legend=dict(orientation="v", yanchor="middle", y=0.5, xanchor="left", x=1.05, font=dict(size=11, color="#EAEAEA")),
+                paper_bgcolor="#1A1A1A",
+                plot_bgcolor="#1A1A1A",
+                font=dict(color="#EAEAEA"),
             )
             evento = st.plotly_chart(fig, use_container_width=True, on_select="rerun", key="pie_chart")
             if evento and evento.get("selection") and evento["selection"].get("points"):
@@ -537,9 +623,7 @@ if "df" in st.session_state:
         else:
             st.caption("Sem dados de data para o período")
 
-    # ============================================================
-    # Tabela com 22 colunas + multi-select
-    # ============================================================
+    # Tabela 22 colunas + multi-select
     st.markdown(f"**Transferências · {len(df_f)} linhas exibidas** " +
                 (f"(filtro: {filtro_ativo})" if filtro_ativo and filtro_ativo != "Todos" else ""))
 
@@ -551,22 +635,30 @@ if "df" in st.session_state:
         "Situação Adto", "Situação Saldo",
     ]
 
+    if "colunas_default" not in st.session_state:
+        st.session_state["colunas_default"] = PADRAO_VISIVEIS
+    if "colunas_version" not in st.session_state:
+        st.session_state["colunas_version"] = 0
+
     with st.expander("⚙️ Escolher colunas visíveis", expanded=False):
+        col_rst1, col_rst2, _ = st.columns([1, 1, 3])
+        with col_rst1:
+            if st.button("✅ Mostrar todas", key="btn_todas"):
+                st.session_state["colunas_default"] = list(COLUNAS_OFICIAIS)
+                st.session_state["colunas_version"] += 1
+                st.rerun()
+        with col_rst2:
+            if st.button("↺ Padrão", key="btn_padrao"):
+                st.session_state["colunas_default"] = PADRAO_VISIVEIS
+                st.session_state["colunas_version"] += 1
+                st.rerun()
+
         colunas_escolhidas = st.multiselect(
             "Selecione as colunas que deseja ver (todas as 22 disponíveis):",
             options=COLUNAS_OFICIAIS,
-            default=PADRAO_VISIVEIS,
-            key="colunas_multiselect",
+            default=st.session_state["colunas_default"],
+            key=f"colunas_multiselect_v{st.session_state['colunas_version']}",
         )
-        col_rst1, col_rst2, _ = st.columns([1, 1, 3])
-        with col_rst1:
-            if st.button("✅ Mostrar todas"):
-                st.session_state["colunas_multiselect"] = COLUNAS_OFICIAIS
-                st.rerun()
-        with col_rst2:
-            if st.button("↺ Padrão"):
-                st.session_state["colunas_multiselect"] = PADRAO_VISIVEIS
-                st.rerun()
 
     if not colunas_escolhidas:
         colunas_escolhidas = PADRAO_VISIVEIS
@@ -601,12 +693,10 @@ if "df" in st.session_state:
         As cores seguem **exatamente** a planilha MOTZ original (célula por célula):
 
         - <span class="status-ok">🟢 OK</span> — colunas **Status**, **Diferença MOTZ×ATUA** e **Vlr. Saldo** em verde
-        - <span class="status-maior">🔴 ATUA MAIOR > R$100</span> — mesmas colunas em vermelho (diferença crítica)
-        - <span class="status-menor">🔵 ATUA MAIOR até R$100 / ATUA MENOR</span> — mesmas colunas em azul (diferença pequena)
+        - <span class="status-maior">🔴 ATUA MAIOR > R$100</span> — mesmas colunas em vermelho
+        - <span class="status-menor">🔵 ATUA MAIOR até R$100 / ATUA MENOR</span> — mesmas colunas em azul
         - <span class="status-ne">🟡 NÃO ENCONTRADO</span> — mesmas colunas em amarelo
         - <span class="status-aberto">🟣 Situação Saldo = Aberto</span> — apenas a coluna **Situação Saldo** em roxo
-
-        Assim você vê ao mesmo tempo: status da conferência MOTZ×ATUA + pendência de saldo.
         """, unsafe_allow_html=True)
 
     csv = df_f.to_csv(index=False).encode("utf-8")
@@ -624,15 +714,14 @@ else:
     )
     with st.expander("ℹ️ Sobre esta ferramenta"):
         st.markdown("""
-        Este aplicativo executa a skill `conciliacao-motz` diretamente no servidor.
-
-        **Novidades v3.3:**
-        - 📋 1 linha por transferência (igual à planilha original)
-        - 📊 22 colunas oficiais da planilha MOTZ
-        - ⚙️ Multi-select para escolher colunas visíveis
-        - 🎨 Cores célula por célula (Status + Diferença + Vlr. Saldo coloridas, Situação Saldo roxa)
-        - 👆 Cards de status e gráfico de pizza clicáveis
+        **Novidades v3.5:**
+        - 🌑 Tema escuro (fundo preto)
+        - 🎨 Logos oficiais Repom/Motz/Atua
+        - 📋 1 linha por transferência (22 colunas)
+        - ⚙️ Multi-select de colunas visíveis
+        - 🎯 Cores célula por célula
+        - 👆 Cards e gráfico clicáveis
         """)
 
 st.divider()
-st.caption("Dashboard Conciliação MOTZ · skill conciliacao-motz · Streamlit Cloud · v3.3")
+st.caption("Dashboard Conciliação MOTZ · skill conciliacao-motz · Streamlit Cloud · v3.5 (dark + logos)")
