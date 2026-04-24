@@ -1,7 +1,7 @@
 """
-Dashboard de Conciliação MOTZ - Streamlit (v3.5)
+Dashboard de Conciliação MOTZ - Streamlit (v4.0)
 Upload de PDFs Repom + MOTZ (XLSX) + ATUA (XLS) → conciliação → visualização
-v3.5: tema dark + logos oficiais + 22 colunas + distribuição clicável
+v4.0: base histórica acumulativa com deduplicação inteligente
 """
 import streamlit as st
 import pandas as pd
@@ -16,7 +16,7 @@ import io
 import sys
 import plotly.express as px
 
-# Logos (base64) — embutidos pra não depender de arquivos externos
+# Logos (base64)
 try:
     from logos_b64 import LOGO_REPOM, LOGO_MOTZ, LOGO_ATUA
 except ImportError:
@@ -75,6 +75,7 @@ st.markdown(f"""
     .stButton > button[kind="primary"] {{ background-color: #378ADD !important; color: #FFFFFF !important; border-color: #378ADD !important; }}
     .stButton > button[kind="primary"]:hover {{ background-color: #2970BF !important; }}
     .stDownloadButton > button {{ background-color: #2A2A2A !important; color: #EAEAEA !important; border: 1px solid #3A3A3A !important; }}
+    .stDownloadButton > button[kind="primary"] {{ background-color: #378ADD !important; color: #FFFFFF !important; border-color: #378ADD !important; }}
     hr {{ border-color: #2A2A2A !important; }}
     .status-ok {{ background: {COLORS['OK']['bg']}; color: {COLORS['OK']['fg']}; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 500; }}
     .status-maior {{ background: {COLORS['ATUA MAIOR']['bg']}; color: {COLORS['ATUA MAIOR']['fg']}; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 500; }}
@@ -94,7 +95,7 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 st.markdown("# Conciliação MOTZ consolidada")
-st.caption("PDFs Repom × MOTZ (XLSX) × Cobrança ATUA (XLS) — cruzamento automático")
+st.caption("PDFs Repom × MOTZ (XLSX) × Cobrança ATUA (XLS) — cruzamento automático · Base Histórica Acumulativa")
 
 def parse_rs(v):
     if v is None or (isinstance(v, float) and pd.isna(v)) or v == "":
@@ -216,13 +217,11 @@ COLUNAS_OFICIAIS = [
     "Data Emissão Repom", "Data Transferência", "Valor Transferido",
     "Situação Adto", "Situação Saldo",
 ]
-
 COLUNAS_VALOR = {
     "Vlr. Frete Líquido", "Vlr. Adiantamento", "Vlr. Saldo", "Soma Adto+Saldo",
     "vl_quebra_avaria", "Diverg. Interna (Quebra/descontos) MOTZ",
     "vl_total ATUA", "Diferença MOTZ×ATUA", "Valor Transferido",
 }
-
 COLUNAS_DATA = {"Data Emissão", "Data Emissão Repom", "Data Transferência"}
 
 
@@ -265,7 +264,7 @@ def processar_xlsx(xlsx_bytes):
     }
 
     if not MAPA["Contrato"] or not MAPA["Status"]:
-        raise ValueError(f"Planilha não reconhecida. Colunas encontradas: {list(df.columns)}")
+        raise ValueError(f"Planilha não reconhecida. Colunas: {list(df.columns)}")
 
     linhas = []
     for _, row in df.iterrows():
@@ -291,15 +290,199 @@ def processar_xlsx(xlsx_bytes):
         if col not in df_out.columns:
             df_out[col] = None
     df_out = df_out[COLUNAS_OFICIAIS]
-    return df_out
+    return df_out# ============================================================
+# MESCLAGEM INTELIGENTE (dedup por contrato+valor+data)
+# ============================================================
+def _chave_linha(row):
+    """Chave única por transferência: Contrato + Valor Transferido + Data Transferência."""
+    c = str(row.get("Contrato", "")).strip()
+    v = row.get("Valor Transferido")
+    v_str = f"{float(v):.2f}" if pd.notna(v) else "0.00"
+    d = row.get("Data Transferência")
+    if pd.notna(d) and hasattr(d, "strftime"):
+        d_str = d.strftime("%Y-%m-%d")
+    else:
+        d_str = ""
+    return f"{c}|{v_str}|{d_str}"
+
+
+def mesclar_dataframes(df_base, df_novo):
+    """Mescla df_novo em df_base deduplicando. Retorna (df, stats)."""
+    if df_base is None or len(df_base) == 0:
+        return df_novo.copy(), {"novas": len(df_novo), "duplicadas": 0, "total": len(df_novo)}
+    if df_novo is None or len(df_novo) == 0:
+        return df_base.copy(), {"novas": 0, "duplicadas": 0, "total": len(df_base)}
+
+    chaves_base = set(df_base.apply(_chave_linha, axis=1))
+    df_novo = df_novo.copy()
+    df_novo["_chave"] = df_novo.apply(_chave_linha, axis=1)
+    mask_novas = ~df_novo["_chave"].isin(chaves_base)
+    df_inserir = df_novo[mask_novas].drop(columns=["_chave"])
+    duplicadas = int((~mask_novas).sum())
+
+    df_final = pd.concat([df_base, df_inserir], ignore_index=True)
+    return df_final, {"novas": len(df_inserir), "duplicadas": duplicadas, "total": len(df_final)}
+
+
+def gerar_xlsx_historico(df):
+    """Gera XLSX colorido com as 22 colunas, pronto para baixar/compartilhar."""
+    import openpyxl
+    from openpyxl.styles import PatternFill, Font
+    from openpyxl.utils.dataframe import dataframe_to_rows
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "conciliacao"
+
+    df_write = df.copy()
+    for col in COLUNAS_DATA:
+        if col in df_write.columns:
+            df_write[col] = df_write[col].apply(
+                lambda d: d.strftime("%d/%m/%Y") if pd.notna(d) and hasattr(d, "strftime") else ""
+            )
+
+    for row in dataframe_to_rows(df_write, index=False, header=True):
+        ws.append(row)
+
+    fills = {
+        "OK":     PatternFill("solid", fgColor="D5E8C1"),
+        "MAIOR":  PatternFill("solid", fgColor="F8CCCC"),
+        "MENOR":  PatternFill("solid", fgColor="CDE3F7"),
+        "NE":     PatternFill("solid", fgColor="FCE9B6"),
+        "ABERTO": PatternFill("solid", fgColor="DDD9FB"),
+    }
+
+    header = [cell.value for cell in ws[1]]
+    def idx(nome):
+        try:
+            return header.index(nome) + 1
+        except ValueError:
+            return None
+
+    col_status = idx("Status")
+    col_diff = idx("Diferença MOTZ×ATUA")
+    col_saldo = idx("Vlr. Saldo")
+    col_sit_saldo = idx("Situação Saldo")
+
+    for row_idx in range(2, ws.max_row + 1):
+        status_val = ws.cell(row=row_idx, column=col_status).value if col_status else ""
+        status = str(status_val).strip().upper() if status_val else ""
+        sit_saldo_val = ws.cell(row=row_idx, column=col_sit_saldo).value if col_sit_saldo else ""
+        saldo_aberto = "aberto" in str(sit_saldo_val).lower() if sit_saldo_val else False
+
+        if status == "OK":
+            fill = fills["OK"]
+        elif status == "ATUA MAIOR":
+            diff_val = ws.cell(row=row_idx, column=col_diff).value if col_diff else 0
+            try:
+                diff_abs = abs(float(diff_val)) if diff_val else 0
+            except (ValueError, TypeError):
+                diff_abs = 0
+            fill = fills["MAIOR"] if diff_abs > 100 else fills["MENOR"]
+        elif status == "ATUA MENOR":
+            fill = fills["MENOR"]
+        elif "ENCONTRADO" in status:
+            fill = fills["NE"]
+        else:
+            fill = None
+
+        if fill:
+            for c in (col_status, col_diff, col_saldo):
+                if c:
+                    ws.cell(row=row_idx, column=c).fill = fill
+
+        if saldo_aberto and col_sit_saldo:
+            ws.cell(row=row_idx, column=col_sit_saldo).fill = fills["ABERTO"]
+
+    bold = Font(bold=True)
+    for cell in ws[1]:
+        cell.font = bold
+        cell.fill = PatternFill("solid", fgColor="E8E8E8")
+
+    for col in ws.columns:
+        try:
+            max_len = max(len(str(c.value)) if c.value else 0 for c in col)
+            ws.column_dimensions[col[0].column_letter].width = min(max_len + 2, 30)
+        except Exception:
+            pass
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
 
 
 # ============================================================
-# UPLOAD com logos oficiais
+# BASE HISTÓRICA (topo — aparece sempre)
 # ============================================================
 with st.container(border=True):
-    st.markdown("### 📂 Arquivos de entrada")
-    st.caption("Suba os 3 tipos de arquivo da conciliação. O sistema roda o script da skill e gera a planilha consolidada automaticamente.")
+    col_h1, col_h2 = st.columns([2, 1])
+    with col_h1:
+        st.markdown("### 📚 Base Histórica")
+        if "df" in st.session_state and len(st.session_state["df"]) > 0:
+            df_atual = st.session_state["df"]
+            n_linhas = len(df_atual)
+            n_contratos = df_atual["Contrato"].nunique()
+            st.caption(f"✅ **{n_linhas} transferências** de **{n_contratos} contratos** carregados na base")
+        else:
+            st.caption("Nenhuma base carregada. Comece subindo uma base histórica existente ou rodando uma nova conciliação abaixo.")
+
+    with col_h2:
+        if "df" in st.session_state and len(st.session_state["df"]) > 0:
+            try:
+                xlsx_base = gerar_xlsx_historico(st.session_state["df"])
+                st.download_button(
+                    "💾 Baixar Base Histórica",
+                    data=xlsx_base,
+                    file_name=f"base_historica_conciliacao_{datetime.now().strftime('%Y-%m-%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    type="primary",
+                )
+            except Exception as e:
+                st.caption(f"Erro ao gerar XLSX: {e}")
+
+    col_h3, col_h4 = st.columns([1, 1])
+    with col_h3:
+        with st.expander("📤 Carregar base histórica existente"):
+            st.caption("Sobrescreve a base atual. Use no início do dia para carregar a base do time.")
+            xlsx_base_upload = st.file_uploader(
+                "Base histórica (XLSX)",
+                type=["xlsx"],
+                key="base_historica_upload",
+                label_visibility="collapsed",
+            )
+            if xlsx_base_upload is not None and st.session_state.get("last_base_loaded") != xlsx_base_upload.name:
+                try:
+                    df_hist = processar_xlsx(xlsx_base_upload.read())
+                    st.session_state["df"] = df_hist
+                    st.session_state["origem"] = f"Base histórica: {xlsx_base_upload.name}"
+                    st.session_state["last_base_loaded"] = xlsx_base_upload.name
+                    st.success(f"✓ Base carregada: {len(df_hist)} transferências")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Erro ao carregar: {e}")
+
+    with col_h4:
+        with st.expander("🗑️ Limpar base"):
+            st.caption("⚠️ Apaga tudo. Ação irreversível (mas você pode recarregar o XLSX).")
+            if st.button("🗑️ Limpar tudo e recomeçar", use_container_width=True):
+                for k in ["df", "xlsx_bytes", "origem", "status_click", "last_base_loaded", "modo_xlsx_pronto"]:
+                    if k in st.session_state:
+                        del st.session_state[k]
+                st.success("Base limpa!")
+                st.rerun()
+
+
+# ============================================================
+# UPLOAD DE NOVOS ARQUIVOS (para MESCLAR na base)
+# ============================================================
+with st.container(border=True):
+    st.markdown("### 📂 Adicionar novos arquivos")
+    base_msg = "**Mesclar** com a base existente" if "df" in st.session_state else "**Começar uma nova base**"
+    st.caption(
+        f"Suba PDFs Repom + MOTZ + ATUA para {base_msg}. "
+        f"Linhas duplicadas (mesmo contrato + mesmo valor + mesma data) serão ignoradas automaticamente."
+    )
 
     col1, col2, col3 = st.columns(3)
 
@@ -358,45 +541,53 @@ with st.container(border=True):
         if atua:
             st.caption(f"✓ {atua.name}")
 
-    col_b1, col_b2, _ = st.columns([1, 1, 3])
+    col_b1, _ = st.columns([1, 3])
     with col_b1:
-        rodar_btn = st.button("🔄 Rodar conciliação", type="primary", use_container_width=True, disabled=not (pdfs and motz and atua))
-    with col_b2:
-        carregar_existente = st.button("📥 Carregar XLSX pronto", use_container_width=True)
+        rodar_btn = st.button("🔄 Processar e mesclar", type="primary", use_container_width=True, disabled=not (pdfs and motz and atua))
 
-if carregar_existente:
-    st.session_state["modo_xlsx_pronto"] = True
-
-if st.session_state.get("modo_xlsx_pronto"):
-    with st.container(border=True):
-        st.markdown("### Carregar planilha de conciliação já gerada")
-        xlsx_pronto = st.file_uploader("conciliacao_motz_completa.xlsx", type=["xlsx"], key="xlsx_pronto")
-        if xlsx_pronto:
-            try:
-                df = processar_xlsx(xlsx_pronto.read())
-                st.session_state["df"] = df
-                st.session_state["origem"] = f"Planilha carregada: {xlsx_pronto.name}"
-                st.success(f"✓ {len(df)} transferências carregadas")
-            except Exception as e:
-                st.error(f"Erro ao processar: {e}")
 
 if rodar_btn and pdfs and motz and atua:
-    with st.spinner("Rodando conciliação... 30s-2min."):
+    with st.spinner("Rodando conciliação... isso pode levar 30s-2min dependendo do tamanho dos arquivos."):
         try:
             pdfs_data = [(f.name, f.read()) for f in pdfs]
             motz_data = motz.read()
             atua_data = atua.read()
-            xlsx_bytes, log = rodar_conciliacao(pdfs_data, motz_data, atua_data, motz.name, atua.name)
-            df = processar_xlsx(xlsx_bytes)
-            st.session_state["df"] = df
+
+            xlsx_bytes, log = rodar_conciliacao(
+                pdfs_data, motz_data, atua_data, motz.name, atua.name
+            )
+            df_novo = processar_xlsx(xlsx_bytes)
+
+            # MESCLAR com a base existente (deduplicação inteligente)
+            df_base_atual = st.session_state.get("df")
+            df_final, stats = mesclar_dataframes(df_base_atual, df_novo)
+
+            st.session_state["df"] = df_final
             st.session_state["xlsx_bytes"] = xlsx_bytes
-            st.session_state["origem"] = f"Conciliação rodada às {datetime.now().strftime('%H:%M:%S')} · {len(pdfs_data)} PDFs + {motz.name} + {atua.name}"
+            st.session_state["origem"] = (
+                f"Mesclado às {datetime.now().strftime('%H:%M:%S')} · "
+                f"{len(pdfs_data)} PDFs + {motz.name} + {atua.name}"
+            )
             st.session_state["log"] = log
-            st.success(f"✓ Conciliação concluída · {len(df)} transferências")
+
+            # Relatório de mesclagem
+            if df_base_atual is None or len(df_base_atual) == 0:
+                st.success(f"✓ Base inicial criada · {stats['total']} transferências")
+            else:
+                msg_partes = [f"✓ Mesclagem concluída!"]
+                if stats["novas"] > 0:
+                    msg_partes.append(f"📥 **{stats['novas']} novas** transferências adicionadas")
+                if stats["duplicadas"] > 0:
+                    msg_partes.append(f"♻️ **{stats['duplicadas']} duplicadas** ignoradas (já existiam)")
+                msg_partes.append(f"📊 **Total agora:** {stats['total']} transferências")
+                st.success("  ·  ".join(msg_partes))
+
+            st.info("💡 Não esqueça de **baixar a base histórica atualizada** no topo da página e compartilhar com o time!", icon="💾")
+
         except Exception as e:
             st.error(f"Erro na conciliação:\n\n{str(e)}")
             st.stop()# ============================================================
-# Dashboard
+# Dashboard (quando houver dados)
 # ============================================================
 if "df" in st.session_state:
     df = st.session_state["df"]
@@ -405,17 +596,19 @@ if "df" in st.session_state:
     if "status_click" not in st.session_state:
         st.session_state["status_click"] = None
 
+    # Cabeçalho do dashboard
     col_a, col_b = st.columns([3, 1])
     with col_a:
         st.caption(f"🟢 {st.session_state.get('origem', '')}")
     with col_b:
         if "xlsx_bytes" in st.session_state:
             st.download_button(
-                "⬇️ Baixar XLSX consolidado",
+                "⬇️ XLSX do último processamento",
                 data=st.session_state["xlsx_bytes"],
-                file_name=f"conciliacao_motz_{datetime.now().strftime('%Y-%m-%d')}.xlsx",
+                file_name=f"ultimo_processamento_{datetime.now().strftime('%Y-%m-%d_%H%M')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True,
+                help="XLSX da última rodada (apenas os arquivos processados agora). Para a base histórica completa, use o botão no topo.",
             )
 
     st.info(
@@ -499,7 +692,7 @@ if "df" in st.session_state:
         )
         df_f = df_f[mask]
 
-    # KPIs (deduplica por contrato)
+    # KPIs
     total_linhas = len(df_periodo)
     df_unicos = df_periodo.drop_duplicates(subset=["Contrato"]) if total_linhas > 0 else df_periodo
     total = len(df_unicos)
@@ -709,12 +902,19 @@ if "df" in st.session_state:
 
 else:
     st.info(
-        "👆 **Comece subindo os 3 arquivos** (PDFs Repom, MOTZ XLSX, ATUA XLS) e clique em **Rodar conciliação**. Ou use **Carregar XLSX pronto** se você já tem a planilha consolidada gerada.",
+        "👆 **Comece subindo os 3 arquivos** (PDFs Repom, MOTZ XLSX, ATUA XLS) para criar sua primeira base, "
+        "ou carregue uma base histórica existente no bloco acima.",
         icon="📤",
     )
     with st.expander("ℹ️ Sobre esta ferramenta"):
         st.markdown("""
-        **Novidades v3.5:**
+        **Novidades v4.0:**
+        - 📚 **Base Histórica Acumulativa** — mantenha dados de vários meses juntos
+        - 🔄 **Mesclagem inteligente** — ignora duplicados, adiciona apenas o que é novo
+        - 💾 **Baixar/Compartilhar** base completa em XLSX a qualquer momento
+        - 🗑️ Limpar base quando precisar recomeçar
+
+        **Anteriores:**
         - 🌑 Tema escuro (fundo preto)
         - 🎨 Logos oficiais Repom/Motz/Atua
         - 📋 1 linha por transferência (22 colunas)
@@ -724,4 +924,4 @@ else:
         """)
 
 st.divider()
-st.caption("Dashboard Conciliação MOTZ · skill conciliacao-motz · Streamlit Cloud · v3.5 (dark + logos)")
+st.caption("Dashboard Conciliação MOTZ · skill conciliacao-motz · Streamlit Cloud · v4.0 (base histórica acumulativa)")
