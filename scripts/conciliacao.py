@@ -4,7 +4,8 @@ Conciliação Bancária MOTZ TRANSPORTES
 Cruza 3 fontes: PDFs Repom, arquivo MOTZ (XLSX), arquivo ATUA (XLS)
 Gera planilha Excel final com verificações e cores.
 
-v4.1 - FIX: NFs separadas por virgula no nr_nf do ATUA agora dao match corretamente.
+v4.1 — FIX: NFs separadas por vírgula no nr_nf do ATUA agora dão match corretamente.
+  Exemplo: se ATUA tem nr_nf = "17272, 17271", o MOTZ encontra tanto 17271 quanto 17272.
 """
 import argparse
 import os
@@ -47,7 +48,7 @@ THIN_BORDER = Border(
 
 def _split_nf_list(nf_raw):
     """
-    Quebra uma string com NFs separadas por virgula/ponto-virgula em lista.
+    Quebra uma string com NFs possivelmente separadas por virgula/ponto-virgula em lista.
     Exemplo: "17272, 17271" -> ["17272", "17271"]
              "156028,156028" -> ["156028"] (dedup)
              "32672.0" -> ["32672"]
@@ -290,8 +291,9 @@ def _parse_currency(value_str):
         return float(s)
     except (ValueError, TypeError):
         return 0.0
-        
-        def read_motz_xlsx(filepath):
+
+
+def read_motz_xlsx(filepath):
     print(f"  Lendo MOTZ: {filepath}")
     wb = openpyxl.load_workbook(filepath, data_only=True)
     ws = wb.active
@@ -445,6 +447,7 @@ def _read_atua_xlsx(filepath):
 def reconcile(motz_records, atua_headers, atua_records, pdf_transfers, quebra_records=None):
     """v4.1 FIX: quebra NFs separadas por virgula no nr_nf ATUA para match correto."""
 
+    # Quebra lookup
     quebra_by_nf = {}
     quebra_source = quebra_records if quebra_records else atua_records
     for rec in quebra_source:
@@ -459,6 +462,7 @@ def reconcile(motz_records, atua_headers, atua_records, pdf_transfers, quebra_re
             else:
                 quebra_by_nf[nf_clean] += vq
 
+    # ATUA lookups
     atua_by_titulo = {}
     atua_by_ctrc = {}
     atua_by_nf = {}
@@ -472,6 +476,7 @@ def reconcile(motz_records, atua_headers, atua_records, pdf_transfers, quebra_re
         titulo_clean = titulo_raw.split('.')[0] if '.' in titulo_raw else titulo_raw
         ctrc_clean = ctrc_raw.split('.')[0] if '.' in ctrc_raw else ctrc_raw
 
+        # CORRECAO v4.1: quebrar NFs separadas por virgula
         nfs_clean = _split_nf_list(nf_raw)
         nf_display = ', '.join(nfs_clean) if nfs_clean else ''
 
@@ -495,6 +500,7 @@ def reconcile(motz_records, atua_headers, atua_records, pdf_transfers, quebra_re
                 'nr_cpf_cnpj_raiz': str(rec.get('nr_cpf_cnpj_raiz', '') or ''),
             })
 
+        # Cada NF vira uma entrada separada!
         for nf_clean in nfs_clean:
             atua_entry = {
                 'nr_titulo': titulo_clean,
@@ -513,6 +519,7 @@ def reconcile(motz_records, atua_headers, atua_records, pdf_transfers, quebra_re
                     if ctrc_clean and ctrc_clean not in existing.get('nr_ctrc', ''):
                         existing['nr_ctrc'] = existing['nr_ctrc'] + ',' + ctrc_clean
 
+    # PDF lookup
     pdf_by_contrato = {}
     for t in pdf_transfers:
         contrato = str(t.get('contrato', '')).strip()
@@ -539,6 +546,7 @@ def reconcile(motz_records, atua_headers, atua_records, pdf_transfers, quebra_re
         divergencia_interna = round(frete_liq - soma_adto_saldo, 2)
 
         atua_match = None
+        # Quebra NFs do MOTZ tambem
         nf_clean_list = _split_nf_list(nf)
 
         for nf_val in nf_clean_list:
@@ -707,7 +715,10 @@ def reconcile(motz_records, atua_headers, atua_records, pdf_transfers, quebra_re
         'soma_frete_atua': sum(r['vl_frete_atua'] or 0 for r in results),
     }
 
-    return results, unmatched_atua, unmatched_pdf, statsdef generate_excel(results, unmatched_atua, unmatched_pdf, stats, output_path):
+    return results, unmatched_atua, unmatched_pdf, stats
+
+
+def generate_excel(results, unmatched_atua, unmatched_pdf, stats, output_path):
     print(f"\n  Gerando Excel: {output_path}")
     wb = openpyxl.Workbook()
     ws1 = wb.active
