@@ -1,7 +1,8 @@
 """
-Dashboard de Conciliação MOTZ - Streamlit (v3)
+Dashboard de Conciliação MOTZ - Streamlit (v4.3)
 Upload de PDFs Repom + MOTZ (XLSX) + ATUA (XLS) → conciliação → visualização
-v3: cores da skill + distribuição clicável (cards + gráfico de pizza)
+v4.3: separa TITULO (NFe) em duas colunas: NFe (do MOTZ) e nr_titulo ATUA (do ATUA)
+v4.2: logo Pianetto no topo + fix NFs com vírgula + divergência interna em vermelho
 """
 import streamlit as st
 import pandas as pd
@@ -386,7 +387,8 @@ def rodar_conciliacao(pdfs_bytes, motz_bytes, atua_bytes, motz_name, atua_name):
 COLUNAS_OFICIAIS = [
     "Cliente",
     "Contrato",
-    "TITULO (NFe)",
+    "NFe",
+    "nr_titulo ATUA",
     "nr_ctrc ATUA",
     "Nº Carta Frete",
     "Motorista",
@@ -434,10 +436,12 @@ def processar_xlsx(xlsx_bytes):
         return None
 
     # Mapeia cada coluna da planilha de origem para o nome oficial
+    # Compatível com planilhas v4.2 (TITULO (NFe)) e v4.3 (NFe + nr_titulo ATUA separadas)
     MAPA = {
         "Cliente":                                  find_col([r"^Cliente"]),
         "Contrato":                                 find_col([r"^Contrato"]),
-        "TITULO (NFe)":                             find_col([r"TITULO.*NFe", r"^TITULO", r"^NFe"]),
+        "NFe":                                      find_col([r"^NFe$", r"TITULO.*NFe", r"^TITULO"]),
+        "nr_titulo ATUA":                           find_col([r"nr_titulo.*ATUA", r"^nr_titulo$"]),
         "nr_ctrc ATUA":                             find_col([r"nr_ctrc.*ATUA", r"^nr_ctrc", r"^CTRC$"]),
         "Nº Carta Frete":                           find_col([r"N.*Carta.*Frete", r"Carta.Frete"]),
         "Motorista":                                find_col([r"^Motorista"]),
@@ -916,9 +920,10 @@ if "df" in st.session_state:
         b = busca.lower()
         mask = (
             df_f["Contrato"].astype(str).str.lower().str.contains(b, na=False) |
+            df_f["nr_titulo ATUA"].astype(str).str.lower().str.contains(b, na=False) |
             df_f["nr_ctrc ATUA"].astype(str).str.lower().str.contains(b, na=False) |
             df_f["Motorista"].astype(str).str.lower().str.contains(b, na=False) |
-            df_f["TITULO (NFe)"].astype(str).str.lower().str.contains(b, na=False) |
+            df_f["NFe"].astype(str).str.lower().str.contains(b, na=False) |
             df_f["Cliente"].astype(str).str.lower().str.contains(b, na=False) |
             df_f["Nº Carta Frete"].astype(str).str.lower().str.contains(b, na=False) |
             df_f["Nº Romaneio"].astype(str).str.lower().str.contains(b, na=False)
@@ -1081,7 +1086,7 @@ if "df" in st.session_state:
     # ---- Multi-select para escolher quais colunas exibir ----
     # Seleção padrão (mais usadas) — usuário pode expandir
     PADRAO_VISIVEIS = [
-        "Cliente", "Contrato", "TITULO (NFe)", "Motorista",
+        "Cliente", "Contrato", "NFe", "nr_titulo ATUA", "Motorista",
         "Data Emissão", "Vlr. Frete Líquido", "Vlr. Saldo",
         "vl_total ATUA", "Diferença MOTZ×ATUA", "Status",
         "Data Transferência", "Valor Transferido",
@@ -1201,4 +1206,4 @@ else:
 
 # Footer
 st.divider()
-st.caption("Dashboard Conciliação MOTZ · skill conciliacao-motz · Streamlit Cloud · v4.2 (logo Pianetto)")
+st.caption("Dashboard Conciliação MOTZ · skill conciliacao-motz · Streamlit Cloud · v4.3 (NFe + nr_titulo separadas)")
