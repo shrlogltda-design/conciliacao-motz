@@ -4,6 +4,7 @@ Conciliação Bancária MOTZ TRANSPORTES
 Cruza 3 fontes: PDFs Repom, arquivo MOTZ (XLSX), arquivo ATUA (XLS)
 Gera planilha Excel final com verificações e cores.
 
+v4.3 — Separação de TITULO (NFe) em duas colunas: NFe (do MOTZ) e nr_titulo ATUA.
 v4.1 — FIX: NFs separadas por vírgula no nr_nf do ATUA agora dão match corretamente.
   Exemplo: se ATUA tem nr_nf = "17272, 17271", o MOTZ encontra tanto 17271 quanto 17272.
 """
@@ -611,10 +612,16 @@ def reconcile(motz_records, atua_headers, atua_records, pdf_transfers, quebra_re
                 nr_ctrc_atua = atua_by_nf[nf_val].get('nr_ctrc', '')
                 break
 
+        # Pegar nr_titulo do ATUA (separado do TITULO/NFe do MOTZ)
+        nr_titulo_atua = ''
+        if atua_match and atua_match.get('nr_titulo'):
+            nr_titulo_atua = atua_match['nr_titulo']
+
         base = {
             'cliente': motz.get('centro_custo', ''),
             'contrato': formulario,
             'titulo_nfe': nf,
+            'nr_titulo_atua': nr_titulo_atua,
             'ctrc': ctrc_final,
             'nr_ctrc_atua': nr_ctrc_atua,
             'carta_frete': motz['carta_frete'],
@@ -725,7 +732,7 @@ def generate_excel(results, unmatched_atua, unmatched_pdf, stats, output_path):
     ws1.title = "Conciliação Completa"
 
     columns = [
-        ('Cliente', 30), ('Contrato', 14), ('TITULO (NFe)', 14),
+        ('Cliente', 30), ('Contrato', 14), ('NFe', 14), ('nr_titulo ATUA', 14),
         ('CTRC', 16), ('nr_ctrc ATUA', 14), ('Nº Carta Frete', 14),
         ('Motorista', 30), ('Nº Romaneio', 14), ('Data Emissão', 16),
         ('Vlr. Frete Líquido', 18), ('Vlr. Adiantamento', 18), ('Vlr. Saldo', 15),
@@ -734,6 +741,11 @@ def generate_excel(results, unmatched_atua, unmatched_pdf, stats, output_path):
         ('Data Emissão Repom', 18), ('Data Transferência', 20), ('Valor Transferido', 16),
         ('Situação Adto', 14), ('Situação Saldo', 14),
     ]
+
+    # Mapa de nome → índice (1-based) para uso dinâmico
+    col_names = [c[0] for c in columns]
+    def col_idx_of(name):
+        return col_names.index(name) + 1
 
     for col_idx, (col_name, col_width) in enumerate(columns, 1):
         cell = ws1.cell(row=1, column=col_idx, value=col_name)
@@ -746,9 +758,36 @@ def generate_excel(results, unmatched_atua, unmatched_pdf, stats, output_path):
     ws1.row_dimensions[1].height = 30
     ws1.auto_filter.ref = f"A1:{openpyxl.utils.get_column_letter(len(columns))}1"
 
+    # Índices das colunas que precisam de tratamento especial
+    IDX_NFE         = col_idx_of('NFe')
+    IDX_NRTIT_ATUA  = col_idx_of('nr_titulo ATUA')
+    IDX_CTRC        = col_idx_of('CTRC')
+    IDX_NRCTRC_ATUA = col_idx_of('nr_ctrc ATUA')
+    IDX_FRETE_LIQ   = col_idx_of('Vlr. Frete Líquido')
+    IDX_SALDO       = col_idx_of('Vlr. Saldo')
+    IDX_DIV_INTERNA = col_idx_of('Diverg. Interna')
+    IDX_VL_ATUA     = col_idx_of('vl_total ATUA')
+    IDX_DIFERENCA   = col_idx_of('Diferença MOTZ×ATUA')
+    IDX_STATUS      = col_idx_of('Status')
+    IDX_VLR_TRANSF  = col_idx_of('Valor Transferido')
+    IDX_SIT_SALDO   = col_idx_of('Situação Saldo')
+    # Colunas com formatação numérica (R$)
+    NUMERIC_COLS = {
+        col_idx_of('Vlr. Frete Líquido'),
+        col_idx_of('Vlr. Adiantamento'),
+        col_idx_of('Vlr. Saldo'),
+        col_idx_of('Soma Adto+Saldo'),
+        col_idx_of('vl_quebra_avaria'),
+        col_idx_of('Diverg. Interna'),
+        col_idx_of('vl_total ATUA'),
+        col_idx_of('Diferença MOTZ×ATUA'),
+        col_idx_of('Valor Transferido'),
+    }
+
     for row_idx, rec in enumerate(results, 2):
         values = [
             rec['cliente'], rec['contrato'], rec['titulo_nfe'],
+            rec.get('nr_titulo_atua', ''),
             rec['ctrc'], rec['nr_ctrc_atua'], rec['carta_frete'],
             rec['motorista'], rec.get('romaneio', ''), rec['data_emissao_motz'],
             rec['vlr_frete_liquido'], rec['vlr_adiantamento'], rec['vlr_saldo'],
@@ -762,14 +801,14 @@ def generate_excel(results, unmatched_atua, unmatched_pdf, stats, output_path):
         for col_idx, val in enumerate(values, 1):
             cell = ws1.cell(row=row_idx, column=col_idx, value=val)
             cell.border = THIN_BORDER
-            if col_idx in (10, 11, 12, 13, 14, 15, 16, 17, 21):
+            if col_idx in NUMERIC_COLS:
                 if isinstance(val, (int, float)):
                     cell.number_format = '#,##0.00'
 
         status = rec['status']
-        diff_cell = ws1.cell(row=row_idx, column=17)
-        status_cell = ws1.cell(row=row_idx, column=18)
-        atua_cell = ws1.cell(row=row_idx, column=16)
+        diff_cell = ws1.cell(row=row_idx, column=IDX_DIFERENCA)
+        status_cell = ws1.cell(row=row_idx, column=IDX_STATUS)
+        atua_cell = ws1.cell(row=row_idx, column=IDX_VL_ATUA)
 
         if status == 'OK':
             for c in (diff_cell, status_cell, atua_cell):
@@ -795,11 +834,11 @@ def generate_excel(results, unmatched_atua, unmatched_pdf, stats, output_path):
 
         div_interna = abs(rec['divergencia_interna']) if rec['divergencia_interna'] else 0
         if div_interna > 100:
-            ws1.cell(row=row_idx, column=15).fill = RED_FILL
-            ws1.cell(row=row_idx, column=15).font = RED_FONT
+            ws1.cell(row=row_idx, column=IDX_DIV_INTERNA).fill = RED_FILL
+            ws1.cell(row=row_idx, column=IDX_DIV_INTERNA).font = RED_FONT
         elif rec['divergencia_interna'] != 0.0:
-            ws1.cell(row=row_idx, column=15).fill = YELLOW_FILL
-            ws1.cell(row=row_idx, column=15).font = Font(color="9C6500", bold=True)
+            ws1.cell(row=row_idx, column=IDX_DIV_INTERNA).fill = YELLOW_FILL
+            ws1.cell(row=row_idx, column=IDX_DIV_INTERNA).font = Font(color="9C6500", bold=True)
 
         if not rec.get('has_pdf', True):
             for col_idx in range(1, len(columns) + 1):
@@ -809,7 +848,7 @@ def generate_excel(results, unmatched_atua, unmatched_pdf, stats, output_path):
 
         sit_saldo = str(rec.get('situacao_saldo', '') or '').strip()
         if sit_saldo.upper() == 'ABERTO':
-            for col_idx in (12, 23):
+            for col_idx in (IDX_SALDO, IDX_SIT_SALDO):
                 cell = ws1.cell(row=row_idx, column=col_idx)
                 cell.fill = PURPLE_FILL
                 cell.font = PURPLE_FONT
@@ -860,14 +899,14 @@ def generate_excel(results, unmatched_atua, unmatched_pdf, stats, output_path):
 
     nao_encontrados_motz = [r for r in results if r['status'] == 'NÃO ENCONTRADO']
     if nao_encontrados_motz:
-        headers_ne = ['TITULO (NFe)', 'Contrato', 'CTRC', 'Vlr. Frete Líquido', 'Motorista', 'Cliente']
+        headers_ne = ['NFe', 'nr_titulo ATUA', 'Contrato', 'CTRC', 'Vlr. Frete Líquido', 'Motorista', 'Cliente']
         for col_idx, h in enumerate(headers_ne, 1):
             cell = ws3.cell(row=2, column=col_idx, value=h)
             cell.fill = HEADER_FILL
             cell.font = HEADER_FONT
             cell.border = THIN_BORDER
         for row_idx, rec in enumerate(nao_encontrados_motz, 3):
-            vals = [rec['titulo_nfe'], rec['contrato'], rec['ctrc'],
+            vals = [rec['titulo_nfe'], rec.get('nr_titulo_atua', ''), rec['contrato'], rec['ctrc'],
                     rec['vlr_frete_liquido'], rec['motorista'], rec['cliente']]
             for col_idx, v in enumerate(vals, 1):
                 cell = ws3.cell(row=row_idx, column=col_idx, value=v)
@@ -914,7 +953,7 @@ def main():
     args = parser.parse_args()
 
     print("=" * 60)
-    print("  CONCILIAÇÃO BANCÁRIA — MOTZ TRANSPORTES  (v4.1)")
+    print("  CONCILIAÇÃO BANCÁRIA — MOTZ TRANSPORTES  (v4.3)")
     print("=" * 60)
 
     print("\n[1/4] Lendo fontes de dados...")
