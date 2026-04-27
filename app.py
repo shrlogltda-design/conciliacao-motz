@@ -489,7 +489,15 @@ def processar_xlsx(xlsx_bytes):
             elif col_oficial in COLUNAS_DATA:
                 nova[col_oficial] = parse_date_br(val)
             else:
-                nova[col_oficial] = str(val).strip() if pd.notna(val) else ""
+                # Limpar números float que viraram texto ("7485.0" → "7485")
+                if pd.notna(val):
+                    s = str(val).strip()
+                    # Se é um float inteiro tipo "7485.0", remove o ".0"
+                    if s.endswith(".0") and s[:-2].lstrip("-").isdigit():
+                        s = s[:-2]
+                    nova[col_oficial] = s
+                else:
+                    nova[col_oficial] = ""
 
         linhas.append(nova)
 
@@ -1206,4 +1214,4 @@ else:
 
 # Footer
 st.divider()
-st.caption("Dashboard Conciliação MOTZ · skill conciliacao-motz · Streamlit Cloud · v4.3 (NFe + nr_titulo separadas)")
+st.caption("Dashboard Conciliação MOTZ · skill conciliacao-motz · Streamlit Cloud · v4.3.1 (limpa .0 dos números)")
