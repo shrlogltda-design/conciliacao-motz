@@ -963,7 +963,7 @@ if "df" in st.session_state:
                 st.download_button(
                     f"📥 Baixa ATUA · {qtd_linhas} linhas",
                     data=csv_atua,
-                    file_name=f"baixa_titulos_atua_{datetime.now().strftime('%Y-%m-%d_%H%M')}.csv",
+                    file_name="planilha_padrao.csv",
                     mime="text/csv",
                     use_container_width=True,
                     type="primary",
@@ -1338,4 +1338,4 @@ else:
 
 # Footer
 st.divider()
-st.caption("Dashboard Conciliação MOTZ · skill conciliacao-motz · Streamlit Cloud · v4.4.3 (CSV ATUA formato exato)")
+st.caption("Dashboard Conciliação MOTZ · skill conciliacao-motz · Streamlit Cloud · v4.4.4 (nome planilha_padrao.csv)")
