@@ -883,25 +883,28 @@ if "df" in st.session_state:
 
         df_f["_tipo"] = df_f.apply(_decidir_tipo, axis=1)
 
-        # Formatadores
-        def _fmt_br(v):
+        # Formatadores no padrão ATUA:
+        #   - Zero -> "0" (sem vírgula)
+        #   - Inteiro -> "1000" (sem ,00)
+        #   - Com centavos -> "3369,96" (vírgula como decimal)
+        def _fmt_atua(v):
+            """Formata número no padrão ATUA: omite ,00 se for inteiro."""
             if pd.isna(v) or v == "" or v is None:
-                return ""
+                return "0"
             try:
-                return f"{float(v):.2f}".replace(".", ",")
+                f = float(v)
             except (ValueError, TypeError):
-                return ""
-
-        def _fmt_quebra(v):
-            try:
-                f = float(v) if pd.notna(v) else 0
-                if f > 0:
-                    return f"{f:.2f}".replace(".", ",")
-            except (ValueError, TypeError):
-                pass
-            return ""
+                return "0"
+            if f == 0:
+                return "0"
+            # Se for inteiro exato, mostra sem decimal
+            if f == int(f):
+                return str(int(f))
+            # Senão, formata com vírgula
+            return f"{f:.2f}".replace(".", ",")
 
         def _fmt_int(v):
+            """Inteiro puro pra IDs (Nr. CTRC, Nr. Fatura)."""
             if pd.isna(v) or v == "":
                 return ""
             try:
@@ -913,18 +916,19 @@ if "df" in st.session_state:
         # Nr. Fatura no ATUA = nr_titulo ATUA (NÃO é a NFe do MOTZ)
         col_titulo_atua = "nr_titulo ATUA" if "nr_titulo ATUA" in df_f.columns else None
 
-        # Montar saída no formato ATUA — campos numéricos vazios viram "0,00" / "0"
+        # Montar saída no formato ATUA
+        # IMPORTANTE: zeros viram "0" e inteiros sem decimal (padrão exato do ATUA)
         out = pd.DataFrame({
             "Nr. CTRC": df_f.get("nr_ctrc ATUA", pd.Series(dtype=str)).apply(_fmt_int),
             "Serie": "1",
-            "Valor Pago": df_f["Valor Transferido"].apply(_fmt_br),
-            "Valor Desconto": "0,00",
-            "Valor de Juros": "0,00",
+            "Valor Pago": df_f["Valor Transferido"].apply(_fmt_atua),
+            "Valor Desconto": "0",
+            "Valor de Juros": "0",
             "Valor Desconto Quebra": df_f.get(
                 "Diverg. Interna (Quebra/descontos) MOTZ",
                 pd.Series([0] * len(df_f))
-            ).apply(lambda v: _fmt_br(v) if pd.notna(v) and float(v or 0) > 0 else "0,00"),
-            "Valor Acres. Quebra": "0,00",
+            ).apply(_fmt_atua),
+            "Valor Acres. Quebra": "0",
             "Tipo Parcela (A = Adiantamento / S = Saldo)": df_f["_tipo"],
             "Nr. Fatura": (
                 df_f[col_titulo_atua].apply(_fmt_int)
@@ -1334,4 +1338,4 @@ else:
 
 # Footer
 st.divider()
-st.caption("Dashboard Conciliação MOTZ · skill conciliacao-motz · Streamlit Cloud · v4.4.2 (fix CSV Baixa ATUA)")
+st.caption("Dashboard Conciliação MOTZ · skill conciliacao-motz · Streamlit Cloud · v4.4.3 (CSV ATUA formato exato)")
