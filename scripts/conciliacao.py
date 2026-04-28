@@ -4,6 +4,7 @@ Conciliação Bancária MOTZ TRANSPORTES
 Cruza 3 fontes: PDFs Repom, arquivo MOTZ (XLSX), arquivo ATUA (XLS)
 Gera planilha Excel final com verificações e cores.
 
+v4.4 — Suporte robusto a PDFs Repom multi-página (cabeçalhos/rodapés repetidos).
 v4.3 — Separação de TITULO (NFe) em duas colunas: NFe (do MOTZ) e nr_titulo ATUA.
 v4.1 — FIX: NFs separadas por vírgula no nr_nf do ATUA agora dão match corretamente.
   Exemplo: se ATUA tem nr_nf = "17272, 17271", o MOTZ encontra tanto 17271 quanto 17272.
@@ -105,14 +106,39 @@ def parse_pdf_repom(pdf_paths):
         print(f"  Lendo PDF: {pdf_path}")
         try:
             with pdfplumber.open(pdf_path) as pdf:
-                for page in pdf.pages:
+                num_pages = len(pdf.pages)
+                print(f"    PDF tem {num_pages} pagina(s)")
+
+                # Junta todas as palavras de todas as páginas em um único stream,
+                # ajustando coordenada y de cada página (offset = altura acumulada).
+                all_words = []
+                page_offset_y = 0
+                transfers_before = len(transfers)
+
+                for page_num, page in enumerate(pdf.pages, 1):
                     words = page.extract_words()
-                    if words:
-                        transfers.extend(_parse_repom_words(words))
-                    else:
+                    if not words:
+                        # fallback: extrair texto puro desta página
                         text = page.extract_text()
                         if text:
                             transfers.extend(_parse_repom_text(text))
+                        continue
+
+                    # Reposicionar coordenadas y pra que a página 2 fique abaixo da 1
+                    for w in words:
+                        new_w = dict(w)
+                        new_w['top'] = w['top'] + page_offset_y
+                        new_w['bottom'] = w['bottom'] + page_offset_y
+                        new_w['_page'] = page_num
+                        all_words.append(new_w)
+
+                    page_offset_y += page.height + 50  # gap entre páginas
+
+                if all_words:
+                    page_transfers = _parse_repom_words(all_words)
+                    transfers.extend(page_transfers)
+                    found_now = len(transfers) - transfers_before
+                    print(f"    {found_now} transferencia(s) encontradas no PDF")
         except Exception as e:
             print(f"  ERRO ao ler PDF {pdf_path}: {e}")
             transfers.extend(_parse_pdf_fallback(pdf_path))
@@ -125,13 +151,19 @@ def _parse_repom_words(words):
     header_y = None
     col_positions = {}
 
+    # Detectar TODOS os "Contrato" (cabeçalhos de cada página em PDFs multi-página)
+    contrato_headers = []
     for w in words:
         if w['text'] == 'Contrato':
-            header_y = w['top']
-            break
+            contrato_headers.append(w['top'])
 
-    if header_y is None:
+    if not contrato_headers:
         return transfers
+
+    # O primeiro é o cabeçalho principal
+    header_y = contrato_headers[0]
+    # Os outros são cabeçalhos de páginas seguintes — vamos filtrar palavras próximas a eles
+    repeated_header_ys = contrato_headers[1:]
 
     header_words = [w for w in words if abs(w['top'] - header_y) < 8]
     for w in header_words:
@@ -163,10 +195,36 @@ def _parse_repom_words(words):
     if len(data_words_header) >= 3:
         col_positions.setdefault('data_pagamento_x', data_words_header[2]['x0'])
 
-    data_words = [w for w in words if w['top'] > header_y + 10]
-    footer_keywords = ['total', 'alameda', 'periodo']
-    data_words = [w for w in data_words
-                  if not any(kw in w['text'].lower() for kw in footer_keywords)]
+    # Filtrar palavras de DADOS:
+    #   - precisa estar abaixo do cabeçalho principal
+    #   - NÃO pode estar nas mesmas linhas dos cabeçalhos repetidos (páginas 2+)
+    def _eh_cabecalho_repetido(w):
+        for rep_y in repeated_header_ys:
+            if abs(w['top'] - rep_y) < 8:
+                return True
+        return False
+
+    data_words = [w for w in words
+                  if w['top'] > header_y + 10 and not _eh_cabecalho_repetido(w)]
+
+    # Filtrar palavras de cabeçalho/rodapé (ex: "Cliente", "Contrato", "Data", "Valor",
+    # "Total", "Período", "Alameda", "Página", etc.)
+    footer_keywords = ['total', 'alameda', 'periodo', 'pagina', 'página']
+    header_repeat_keywords = ['cliente', 'data', 'emissao', 'emissão', 'quitacao',
+                              'quitação', 'pagamento', 'transferencia', 'transferência',
+                              'valor', 'comprovante']
+
+    def _palavra_eh_lixo(w):
+        txt = w['text'].lower().strip()
+        # Exclui se for keyword de footer
+        if any(kw in txt for kw in footer_keywords):
+            return True
+        # Exclui se for cabeçalho repetido (sem ser número)
+        if txt in header_repeat_keywords or txt == 'contrato':
+            return True
+        return False
+
+    data_words = [w for w in data_words if not _palavra_eh_lixo(w)]
 
     if not data_words:
         return transfers
@@ -953,7 +1011,7 @@ def main():
     args = parser.parse_args()
 
     print("=" * 60)
-    print("  CONCILIAÇÃO BANCÁRIA — MOTZ TRANSPORTES  (v4.3)")
+    print("  CONCILIAÇÃO BANCÁRIA — MOTZ TRANSPORTES  (v4.4)")
     print("=" * 60)
 
     print("\n[1/4] Lendo fontes de dados...")
