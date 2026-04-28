@@ -444,7 +444,7 @@ def processar_xlsx(xlsx_bytes):
         "Contrato":                                 find_col([r"^Contrato"]),
         "NFe":                                      find_col([r"^NFe$", r"TITULO.*NFe", r"^TITULO"]),
         "nr_titulo ATUA":                           find_col([r"nr_titulo.*ATUA", r"^nr_titulo$"]),
-        "nr_ctrc ATUA":                             find_col([r"nr_ctrc.*ATUA", r"^nr_ctrc", r"^CTRC$"]),
+        "nr_ctrc ATUA":                             find_col([r"nr_ctrc.*ATUA", r"^nr_ctrc$"]),
         "Nº Carta Frete":                           find_col([r"N.*Carta.*Frete", r"Carta.Frete"]),
         "Motorista":                                find_col([r"^Motorista"]),
         "Nº Romaneio":                              find_col([r"N.*Romaneio", r"^Romaneio"]),
@@ -909,23 +909,28 @@ if "df" in st.session_state:
             except (ValueError, TypeError):
                 return str(v).strip()
 
-        # Coluna de NFe (compatível com v4.2 antiga "TITULO (NFe)" e v4.3 nova "NFe")
-        col_nfe = "NFe" if "NFe" in df_f.columns else "TITULO (NFe)"
+        # Coluna do nr_titulo ATUA (compatível com v4.3+ que tem coluna separada)
+        # Nr. Fatura no ATUA = nr_titulo ATUA (NÃO é a NFe do MOTZ)
+        col_titulo_atua = "nr_titulo ATUA" if "nr_titulo ATUA" in df_f.columns else None
 
-        # Montar saída no formato ATUA
+        # Montar saída no formato ATUA — campos numéricos vazios viram "0,00" / "0"
         out = pd.DataFrame({
             "Nr. CTRC": df_f.get("nr_ctrc ATUA", pd.Series(dtype=str)).apply(_fmt_int),
             "Serie": "1",
             "Valor Pago": df_f["Valor Transferido"].apply(_fmt_br),
-            "Valor Desconto": "",
-            "Valor de Juros": "",
+            "Valor Desconto": "0,00",
+            "Valor de Juros": "0,00",
             "Valor Desconto Quebra": df_f.get(
                 "Diverg. Interna (Quebra/descontos) MOTZ",
                 pd.Series([0] * len(df_f))
-            ).apply(_fmt_quebra),
-            "Valor Acres. Quebra": "",
+            ).apply(lambda v: _fmt_br(v) if pd.notna(v) and float(v or 0) > 0 else "0,00"),
+            "Valor Acres. Quebra": "0,00",
             "Tipo Parcela (A = Adiantamento / S = Saldo)": df_f["_tipo"],
-            "Nr. Fatura": df_f.get(col_nfe, pd.Series(dtype=str)).apply(_fmt_int),
+            "Nr. Fatura": (
+                df_f[col_titulo_atua].apply(_fmt_int)
+                if col_titulo_atua
+                else pd.Series([""] * len(df_f))
+            ),
         })
 
         # Remover linhas sem CTRC ou sem Fatura (não dá pra baixar no ATUA)
@@ -1329,4 +1334,4 @@ else:
 
 # Footer
 st.divider()
-st.caption("Dashboard Conciliação MOTZ · skill conciliacao-motz · Streamlit Cloud · v4.4 (botão Baixa ATUA)")
+st.caption("Dashboard Conciliação MOTZ · skill conciliacao-motz · Streamlit Cloud · v4.4.2 (fix CSV Baixa ATUA)")
