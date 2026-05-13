@@ -4,6 +4,7 @@ Conciliação Bancária MOTZ TRANSPORTES
 Cruza 3 fontes: PDFs Repom, arquivo MOTZ (XLSX), arquivo ATUA (XLS)
 Gera planilha Excel final com verificações e cores.
 
+v4.5 — Quebra/divergência só aparece na linha do SALDO (não duplica no adto).
 v4.4 — Suporte robusto a PDFs Repom multi-página (cabeçalhos/rodapés repetidos).
 v4.3 — Separação de TITULO (NFe) em duas colunas: NFe (do MOTZ) e nr_titulo ATUA.
 v4.1 — FIX: NFs separadas por vírgula no nr_nf do ATUA agora dão match corretamente.
@@ -700,6 +701,16 @@ def reconcile(motz_records, atua_headers, atua_records, pdf_transfers, quebra_re
         }
 
         if pdf_matches:
+            # ╔══════════════════════════════════════════════════════════════╗
+            # ║ Quando há múltiplas transferências (adto + saldo), a quebra ║
+            # ║ e divergência só aparecem na linha do SALDO.                 ║
+            # ║ Detecta tipo de cada transferência comparando com vlr_adto  ║
+            # ║ e vlr_saldo do MOTZ.                                         ║
+            # ╚══════════════════════════════════════════════════════════════╝
+            vlr_adto_motz = motz['vlr_adiantamento']
+            vlr_saldo_motz = motz['vlr_saldo']
+            tem_multiplas = len(pdf_matches) > 1
+
             for pdf_m in pdf_matches:
                 row = dict(base)
                 row['has_pdf'] = True
@@ -708,6 +719,20 @@ def reconcile(motz_records, atua_headers, atua_records, pdf_transfers, quebra_re
                 row['data_pagamento'] = pdf_m.get('data_pagamento', '')
                 row['data_transferencia'] = pdf_m.get('data_transferencia', '')
                 row['valor_transferido'] = pdf_m.get('valor', '')
+
+                if tem_multiplas:
+                    # Determinar se esta transferência é Adto (A) ou Saldo (S)
+                    vt = float(pdf_m.get('valor', 0) or 0)
+                    dist_adto = abs(vt - vlr_adto_motz)
+                    dist_saldo = abs(vt - vlr_saldo_motz)
+                    # Se está mais perto do adto → é adto. Caso contrário → saldo
+                    eh_adto = dist_adto < dist_saldo
+                    if eh_adto:
+                        # Linha do adto: zera quebra e divergência
+                        row['vl_quebra_avaria'] = 0
+                        row['divergencia_interna'] = 0.0
+                    # Linha do saldo: mantém quebra e divergência (já vem do base)
+
                 results.append(row)
         else:
             row = dict(base)
@@ -1011,7 +1036,7 @@ def main():
     args = parser.parse_args()
 
     print("=" * 60)
-    print("  CONCILIAÇÃO BANCÁRIA — MOTZ TRANSPORTES  (v4.4)")
+    print("  CONCILIAÇÃO BANCÁRIA — MOTZ TRANSPORTES  (v4.5)")
     print("=" * 60)
 
     print("\n[1/4] Lendo fontes de dados...")
