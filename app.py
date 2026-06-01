@@ -1,6 +1,7 @@
 """
-Dashboard de Conciliação MOTZ - Streamlit (v4.6)
+Dashboard de Conciliação MOTZ - Streamlit (v4.7)
 Upload de PDFs Repom + MOTZ (XLSX) + ATUA (XLS) → conciliação → visualização
+v4.7: + R$1,00 de desconto fixo (Repom) em todo SALDO somado em Valor Desconto Quebra
 v4.6: Valor Desconto Quebra no CSV de Baixa ATUA agora vem de vl_quebra_avaria (era Diverg. Interna)
 v4.4: botão Baixa de Títulos ATUA (CSV pra quitação automática)
 v4.3.1: limpa .0 dos números inteiros
@@ -884,6 +885,20 @@ if "df" in st.session_state:
 
         df_f["_tipo"] = df_f.apply(_decidir_tipo, axis=1)
 
+        # Quebra/Desconto: pega vl_quebra_avaria e soma R$1,00 fixo se for saldo (Repom).
+        # Esse R$1,00 é o desconto padrão da Repom em toda baixa de saldo.
+        def _calc_quebra_final(row):
+            base = 0.0
+            try:
+                base = float(row.get("vl_quebra_avaria", 0) or 0)
+            except (ValueError, TypeError):
+                base = 0.0
+            if row.get("_tipo") == "S":
+                base += 1.0
+            return base
+
+        df_f["_quebra_final"] = df_f.apply(_calc_quebra_final, axis=1)
+
         # Formatadores no padrão ATUA:
         #   - Zero -> "0" (sem vírgula)
         #   - Inteiro -> "1000" (sem ,00)
@@ -925,10 +940,7 @@ if "df" in st.session_state:
             "Valor Pago": df_f["Valor Transferido"].apply(_fmt_atua),
             "Valor Desconto": "0",
             "Valor de Juros": "0",
-            "Valor Desconto Quebra": df_f.get(
-                "vl_quebra_avaria",
-                pd.Series([0] * len(df_f))
-            ).apply(_fmt_atua),
+            "Valor Desconto Quebra": df_f["_quebra_final"].apply(_fmt_atua),
             "Valor Acres. Quebra": "0",
             "Tipo Parcela (A = Adiantamento / S = Saldo)": df_f["_tipo"],
             "Nr. Fatura": (
