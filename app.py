@@ -1,6 +1,7 @@
 """
-Dashboard de Conciliação MOTZ - Streamlit (v4.4)
+Dashboard de Conciliação MOTZ - Streamlit (v4.6)
 Upload de PDFs Repom + MOTZ (XLSX) + ATUA (XLS) → conciliação → visualização
+v4.6: Valor Desconto Quebra no CSV de Baixa ATUA agora vem de vl_quebra_avaria (era Diverg. Interna)
 v4.4: botão Baixa de Títulos ATUA (CSV pra quitação automática)
 v4.3.1: limpa .0 dos números inteiros
 v4.3: separa TITULO (NFe) em duas colunas: NFe (do MOTZ) e nr_titulo ATUA (do ATUA)
@@ -925,7 +926,7 @@ if "df" in st.session_state:
             "Valor Desconto": "0",
             "Valor de Juros": "0",
             "Valor Desconto Quebra": df_f.get(
-                "Diverg. Interna (Quebra/descontos) MOTZ",
+                "vl_quebra_avaria",
                 pd.Series([0] * len(df_f))
             ).apply(_fmt_atua),
             "Valor Acres. Quebra": "0",
