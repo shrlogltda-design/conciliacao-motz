@@ -269,7 +269,7 @@ def colorir_linhas_tabela(df_pd):
     - 'Status' e 'Diferença MOTZ×ATUA': cor do status (verde/vermelho/azul/amarelo)
     - 'Vlr. Saldo': cor do status (como na planilha)
     - 'Situação Saldo': ROXO se "Aberto"
-    - 'Diverg. Interna (Quebra/descontos) MOTZ': VERMELHO se diferente de zero
+    - 'vl_quebra_avaria': VERMELHO se diferente de zero
     - Outras colunas: sem fundo
     """
     def _pintar(coluna, row):
