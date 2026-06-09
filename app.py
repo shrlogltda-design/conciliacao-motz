@@ -1,6 +1,8 @@
 """
-Dashboard de Conciliação MOTZ - Streamlit (v4.7)
+Dashboard de Conciliação MOTZ - Streamlit (v4.9)
 Upload de PDFs Repom + MOTZ (XLSX) + ATUA (XLS) → conciliação → visualização
+v4.9: ATUA MAIOR duplicado (mesmo nr_titulo em + de 1 linha) → AMARELO nas duplicatas
+      (origem = data emissão mais antiga, mantém VERMELHO). Soma vl_total ATUA deduplicada.
 v4.7: + R$1,00 de desconto fixo (Repom) em todo SALDO somado em Valor Desconto Quebra
 v4.6: Valor Desconto Quebra no CSV de Baixa ATUA agora vem de vl_quebra_avaria (era Diverg. Interna)
 v4.4: botão Baixa de Títulos ATUA (CSV pra quitação automática)
@@ -51,6 +53,7 @@ st.set_page_config(
 # Vermelho = ATUA MAIOR > R$100 (crítico)
 # Azul   = ATUA MAIOR até R$100 (diferença pequena)
 # Amarelo = NÃO ENCONTRADO / sem PDF
+# Amarelo Ouro = ATUA DUPLICADO (mesmo título em + de 1 linha — só a origem fica vermelha)
 # Roxo   = Saldo Aberto
 COLORS = {
     # Paleta ajustada para fundo preto — fundos escuros saturados + textos claros
@@ -58,6 +61,7 @@ COLORS = {
     "ATUA MAIOR":    {"bg": "#5A1A1A", "fg": "#F5B8B8", "border": "#E05757", "plot": "#E85858"},
     "ATUA MENOR":    {"bg": "#1A3A5A", "fg": "#B8D8F5", "border": "#5F95D0", "plot": "#5FA0E0"},
     "NAO ENCONTRADO":{"bg": "#5A3F0F", "fg": "#F5DB9E", "border": "#C08D3A", "plot": "#E0A040"},
+    "ATUA DUPLICADO":{"bg": "#5A5005", "fg": "#FFF3A0", "border": "#D4B83A", "plot": "#E8C849"},
     "SALDO ABERTO":  {"bg": "#3A2F6B", "fg": "#CFC4F5", "border": "#7A6FD0", "plot": "#8B7FE0"},
 }
 
@@ -265,6 +269,49 @@ def fmt_rs(n):
     return f"R$ {n:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
+def marcar_duplicacoes_atua(df):
+    """
+    v4.9: Marca como DUPLICADAS as linhas Repom que apontam pro MESMO nr_titulo
+    ATUA com Status ATUA MAIOR. A linha ORIGEM (mantém Status original / vermelho)
+    é a com Data Emissão MAIS ANTIGA. As demais ganham flag _atua_duplicado=True
+    pra ficar AMARELO no dashboard e não duplicar a soma de vl_total ATUA.
+    """
+    df = df.copy()
+    df["_atua_duplicado"] = False
+
+    if "nr_titulo ATUA" not in df.columns or "Status" not in df.columns:
+        return df
+
+    # Apenas linhas com Status ATUA MAIOR e nr_titulo ATUA preenchido
+    titulo_str = df["nr_titulo ATUA"].astype(str).str.strip()
+    mask = (
+        (df["Status"].astype(str).str.upper() == "ATUA MAIOR") &
+        df["nr_titulo ATUA"].notna() &
+        (titulo_str != "") &
+        (titulo_str.str.lower() != "none") &
+        (titulo_str.str.lower() != "nan")
+    )
+
+    df_grupo = df[mask].copy()
+    if df_grupo.empty or len(df_grupo) < 2:
+        return df
+
+    # Ordenar por Data Emissão (mais antiga primeiro)
+    if "Data Emissão" in df_grupo.columns:
+        df_grupo["_data_sort"] = pd.to_datetime(
+            df_grupo["Data Emissão"], errors="coerce", dayfirst=True
+        )
+        df_grupo = df_grupo.sort_values("_data_sort", na_position="last")
+
+    # Pra cada nr_titulo ATUA com 2+ ocorrências: 1ª linha = origem, demais = duplicadas
+    for titulo, grupo in df_grupo.groupby("nr_titulo ATUA"):
+        if len(grupo) > 1:
+            idx_duplicadas = grupo.index[1:]
+            df.loc[idx_duplicadas, "_atua_duplicado"] = True
+
+    return df
+
+
 def colorir_linhas_tabela(df_pd):
     """
     Colore CÉLULA POR CÉLULA (igual à planilha MOTZ):
@@ -278,13 +325,18 @@ def colorir_linhas_tabela(df_pd):
         status = str(row.get("Status", "")).strip().upper()
         sit_saldo = str(row.get("Situação Saldo", "")).strip().lower()
         saldo_aberto = "aberto" in sit_saldo
+        is_dup = bool(row.get("_atua_duplicado", False))
 
         # Definir cor do status atual
         if status == "OK":
             c_status = COLORS["OK"]
         elif status == "ATUA MAIOR":
-            diff = abs(row.get("Diferença MOTZ×ATUA") or 0)
-            c_status = COLORS["ATUA MAIOR"] if diff > 100 else COLORS["ATUA MENOR"]
+            if is_dup:
+                # v4.9: duplicada do mesmo nr_titulo ATUA → AMARELO (origem mantém vermelho)
+                c_status = COLORS["ATUA DUPLICADO"]
+            else:
+                diff = abs(row.get("Diferença MOTZ×ATUA") or 0)
+                c_status = COLORS["ATUA MAIOR"] if diff > 100 else COLORS["ATUA MENOR"]
         elif status == "ATUA MENOR":
             c_status = COLORS["ATUA MENOR"]
         elif "ENCONTRADO" in status:
@@ -1046,6 +1098,9 @@ if "df" in st.session_state:
         df_f = df_f[df_f["Data Emissão"].apply(lambda d: pd.isna(d) or d.date() <= date_to)]
 
     df_periodo = df_f.copy()  # para KPIs do período (sem filtro de status)
+    # v4.9: marca linhas com mesmo nr_titulo ATUA (ATUA MAIOR) — origem = mais antiga
+    df_periodo = marcar_duplicacoes_atua(df_periodo)
+    df_f = marcar_duplicacoes_atua(df_f)
 
     # ============================================================
     # Combinar filtro do dropdown + filtro clicável
@@ -1090,7 +1145,12 @@ if "df" in st.session_state:
     aberto_n = (df_unicos["Situação Saldo"] == "Aberto").sum()
 
     soma_motz = df_unicos["Vlr. Frete Líquido"].fillna(0).sum()
-    soma_atua = df_unicos["vl_total ATUA"].fillna(0).sum()
+    # v4.9: na soma do vl_total ATUA, exclui as linhas marcadas como duplicadas
+    # (mesmo nr_titulo ATUA em + de 1 linha Repom → conta só a origem)
+    if "_atua_duplicado" in df_unicos.columns:
+        soma_atua = df_unicos[df_unicos["_atua_duplicado"] != True]["vl_total ATUA"].fillna(0).sum()
+    else:
+        soma_atua = df_unicos["vl_total ATUA"].fillna(0).sum()
     # Valor Transferido: SOMA TODAS as linhas (cada linha = 1 transferência)
     soma_transf = df_periodo["Valor Transferido"].fillna(0).sum()
     contratos_com_transf = df_periodo[df_periodo["Valor Transferido"].fillna(0) > 0]["Contrato"].nunique()
