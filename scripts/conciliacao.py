@@ -4,6 +4,9 @@ Conciliação Bancária MOTZ TRANSPORTES
 Cruza 3 fontes: PDFs Repom, arquivo MOTZ (XLSX), arquivo ATUA (XLS)
 Gera planilha Excel final com verificações e cores.
 
+v4.8 — FIX: NF com múltiplos títulos/CTRCs no ATUA não soma mais vl_total nem
+  concatena nr_ctrc. Cada linha Repom casa com 1 título ATUA específico via
+  match por CTRC → valor mais próximo → round-robin.
 v4.5 — Quebra/divergência só aparece na linha do SALDO (não duplica no adto).
 v4.4 — Suporte robusto a PDFs Repom multi-página (cabeçalhos/rodapés repetidos).
 v4.3 — Separação de TITULO (NFe) em duas colunas: NFe (do MOTZ) e nr_titulo ATUA.
@@ -561,6 +564,9 @@ def reconcile(motz_records, atua_headers, atua_records, pdf_transfers, quebra_re
             })
 
         # Cada NF vira uma entrada separada!
+        # v4.8 FIX: NF pode ter MÚLTIPLOS títulos/CTRCs no ATUA — cada um vira
+        # uma entry separada na lista. NÃO somamos mais vl_frete nem concatenamos
+        # nr_ctrc. O match com a Repom escolhe a entry correta no loop abaixo.
         for nf_clean in nfs_clean:
             atua_entry = {
                 'nr_titulo': titulo_clean,
@@ -570,14 +576,7 @@ def reconcile(motz_records, atua_headers, atua_records, pdf_transfers, quebra_re
                 'nm_pessoa_matriz': str(rec.get('nm_pessoa_matriz', '') or ''),
                 'nr_cpf_cnpj_raiz': str(rec.get('nr_cpf_cnpj_raiz', '') or ''),
             }
-            if nf_clean not in atua_by_nf:
-                atua_by_nf[nf_clean] = atua_entry
-            else:
-                existing = atua_by_nf[nf_clean]
-                if isinstance(existing, dict):
-                    existing['vl_frete'] = existing['vl_frete'] + vl_frete
-                    if ctrc_clean and ctrc_clean not in existing.get('nr_ctrc', ''):
-                        existing['nr_ctrc'] = existing['nr_ctrc'] + ',' + ctrc_clean
+            atua_by_nf.setdefault(nf_clean, []).append(atua_entry)
 
     # PDF lookup
     pdf_by_contrato = {}
@@ -589,12 +588,16 @@ def reconcile(motz_records, atua_headers, atua_records, pdf_transfers, quebra_re
     print(f"\n  Indices criados:")
     print(f"    ATUA por titulo: {len(atua_by_titulo)} registros")
     print(f"    ATUA por CTRC: {len(atua_by_ctrc)} registros")
-    print(f"    ATUA por NF: {len(atua_by_nf)} registros (inclui NFs separadas por virgula)")
+    total_entries_nf = sum(len(v) if isinstance(v, list) else 1 for v in atua_by_nf.values())
+    print(f"    ATUA por NF: {len(atua_by_nf)} NFs / {total_entries_nf} entries (mantém títulos separados)")
     print(f"    PDF por contrato: {len(pdf_by_contrato)} registros")
 
     results = []
     matched_atua = set()
     matched_pdf = set()
+    # v4.8: rastreia entries ATUA já usadas (nf, titulo) → evita 2 linhas Repom
+    # consumirem o mesmo título quando uma NF tem múltiplos títulos
+    matched_entries = set()
 
     for motz in motz_records:
         nf = motz['nf_cliente']
@@ -609,11 +612,56 @@ def reconcile(motz_records, atua_headers, atua_records, pdf_transfers, quebra_re
         # Quebra NFs do MOTZ tambem
         nf_clean_list = _split_nf_list(nf)
 
+        # v4.8: quando uma NF tem múltiplas entries no ATUA (títulos/CTRCs
+        # diferentes), escolhe a entry certa por: (1) match de CTRC, depois
+        # (2) valor mais próximo de vlr_frete_liquido, depois (3) primeira
+        # entry ainda não usada por outra linha Repom.
+        def _ctrc_norm(s):
+            s = str(s or '').strip()
+            s = s.split('.')[0] if '.' in s else s
+            return s.lstrip('0') or '0'
+
+        ctes_norm = [_ctrc_norm(c) for c in ctes if c]
+
         for nf_val in nf_clean_list:
             if nf_val in atua_by_nf:
-                atua_match = atua_by_nf[nf_val]
-                matched_atua.add(nf_val)
-                break
+                candidates = atua_by_nf[nf_val]
+                if not isinstance(candidates, list):
+                    candidates = [candidates]
+
+                pick = None
+                # (1) tenta match por CTRC
+                if ctes_norm:
+                    for cand in candidates:
+                        cand_ctrc = _ctrc_norm(cand.get('nr_ctrc', ''))
+                        if cand_ctrc and cand_ctrc in ctes_norm:
+                            key = (nf_val, cand.get('nr_titulo', ''), cand.get('nr_ctrc', ''))
+                            if key not in matched_entries:
+                                pick = cand
+                                matched_entries.add(key)
+                                break
+
+                # (2) match por valor mais próximo (entre não usadas)
+                if pick is None:
+                    livres = [
+                        c for c in candidates
+                        if (nf_val, c.get('nr_titulo', ''), c.get('nr_ctrc', '')) not in matched_entries
+                    ]
+                    if livres:
+                        livres.sort(key=lambda c: abs(_safe_float(c.get('vl_frete', 0)) - frete_liq))
+                        pick = livres[0]
+                        key = (nf_val, pick.get('nr_titulo', ''), pick.get('nr_ctrc', ''))
+                        matched_entries.add(key)
+
+                # (3) fallback: se todas já usadas, pega a primeira (não marca)
+                if pick is None and candidates:
+                    pick = candidates[0]
+
+                if pick is not None:
+                    atua_match = pick
+                    matched_atua.add(nf_val)
+                    break
+
             if nf_val in atua_by_titulo:
                 atua_match = atua_by_titulo[nf_val]
                 matched_atua.add(nf_val)
@@ -649,14 +697,10 @@ def reconcile(motz_records, atua_headers, atua_records, pdf_transfers, quebra_re
             else:
                 status = 'ATUA MAIOR'
 
+        # v4.8: ctrc_final vem do atua_match específico (já escolhido acima),
+        # não do atua_by_nf agregado (que agora é lista, não tem mais 'nr_ctrc' direto)
         ctrc_final = ''
-        for nf_val in nf_clean_list:
-            if nf_val in atua_by_nf:
-                ctrc_val = atua_by_nf[nf_val].get('nr_ctrc', '')
-                if ctrc_val:
-                    ctrc_final = ctrc_val
-                    break
-        if not ctrc_final and atua_match and atua_match.get('nr_ctrc'):
+        if atua_match and atua_match.get('nr_ctrc'):
             ctrc_final = atua_match['nr_ctrc']
         if not ctrc_final and ctes:
             ctrc_final = ', '.join(ctes)
@@ -665,11 +709,10 @@ def reconcile(motz_records, atua_headers, atua_records, pdf_transfers, quebra_re
         if pdf_matches:
             matched_pdf.add(formulario)
 
+        # v4.8: nr_ctrc_atua também vem do atua_match específico
         nr_ctrc_atua = ''
-        for nf_val in nf_clean_list:
-            if nf_val in atua_by_nf:
-                nr_ctrc_atua = atua_by_nf[nf_val].get('nr_ctrc', '')
-                break
+        if atua_match and atua_match.get('nr_ctrc'):
+            nr_ctrc_atua = atua_match['nr_ctrc']
 
         # Pegar nr_titulo do ATUA (separado do TITULO/NFe do MOTZ)
         nr_titulo_atua = ''
