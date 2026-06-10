@@ -1,6 +1,7 @@
 """
-Dashboard de Conciliação MOTZ - Streamlit (v4.9)
+Dashboard de Conciliação MOTZ - Streamlit (v5.0)
 Upload de PDFs Repom + MOTZ (XLSX) + ATUA (XLS) → conciliação → visualização
+v5.0: Nova aba "Franquia × Franqueadora" (ADAPTA × PIANETTO) via st.tabs()
 v4.9: ATUA MAIOR duplicado (mesmo nr_titulo em + de 1 linha) → AMARELO nas duplicatas
       (origem = data emissão mais antiga, mantém VERMELHO). Soma vl_total ATUA deduplicada.
 v4.7: + R$1,00 de desconto fixo (Repom) em todo SALDO somado em Valor Desconto Quebra
@@ -213,8 +214,17 @@ if LOGO_PIANETTO:
         unsafe_allow_html=True,
     )
 
-st.markdown("# Conciliação MOTZ consolidada")
-st.caption("PDFs Repom × MOTZ (XLSX) × Cobrança ATUA (XLS) — cruzamento automático")
+st.markdown("# Dashboards de Conciliação")
+st.caption("Conciliação MOTZ (Pianetto) e Franquia × Franqueadora (ADAPTA × PIANETTO) — cruzamento automático")
+
+# Import da skill nova (Franquia × Franqueadora)
+try:
+    from scripts.conciliacao_franquia import rodar_conciliacao_franquia
+    FRANQUIA_DISPONIVEL = True
+except Exception as _e_fr:
+    FRANQUIA_DISPONIVEL = False
+    _FRANQUIA_ERR = str(_e_fr)
+
 
 
 # ============================================================
@@ -690,725 +700,906 @@ def gerar_xlsx_historico(df):
     return buf.getvalue()
 
 
-# ============================================================
-# UPLOAD
-# ============================================================
-# BASE HISTÓRICA (topo — aparece sempre)
-# ============================================================
-with st.container(border=True):
-    col_h1, col_h2 = st.columns([2, 1])
-    with col_h1:
-        st.markdown("### 📚 Base Histórica")
-        if "df" in st.session_state and len(st.session_state["df"]) > 0:
-            df_atual = st.session_state["df"]
-            n_linhas = len(df_atual)
-            n_contratos = df_atual["Contrato"].nunique()
-            st.caption(f"✅ **{n_linhas} transferências** de **{n_contratos} contratos** carregados na base")
-        else:
-            st.caption("Nenhuma base carregada. Comece subindo uma base histórica existente ou rodando uma nova conciliação abaixo.")
 
-    with col_h2:
-        if "df" in st.session_state and len(st.session_state["df"]) > 0:
-            try:
-                xlsx_base = gerar_xlsx_historico(st.session_state["df"])
-                st.download_button(
-                    "💾 Baixar Base Histórica",
-                    data=xlsx_base,
-                    file_name=f"base_historica_conciliacao_{datetime.now().strftime('%Y-%m-%d')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
-                    type="primary",
+# ============================================================
+# Tabs principais (v5.0)
+# ============================================================
+tab_motz, tab_franquia = st.tabs([
+    "🔄 Conciliação MOTZ",
+    "🤝 Franquia × Franqueadora (ADAPTA × PIANETTO)",
+])
+
+with tab_motz:
+    # ============================================================
+    # UPLOAD
+    # ============================================================
+    # BASE HISTÓRICA (topo — aparece sempre)
+    # ============================================================
+    with st.container(border=True):
+        col_h1, col_h2 = st.columns([2, 1])
+        with col_h1:
+            st.markdown("### 📚 Base Histórica")
+            if "df" in st.session_state and len(st.session_state["df"]) > 0:
+                df_atual = st.session_state["df"]
+                n_linhas = len(df_atual)
+                n_contratos = df_atual["Contrato"].nunique()
+                st.caption(f"✅ **{n_linhas} transferências** de **{n_contratos} contratos** carregados na base")
+            else:
+                st.caption("Nenhuma base carregada. Comece subindo uma base histórica existente ou rodando uma nova conciliação abaixo.")
+
+        with col_h2:
+            if "df" in st.session_state and len(st.session_state["df"]) > 0:
+                try:
+                    xlsx_base = gerar_xlsx_historico(st.session_state["df"])
+                    st.download_button(
+                        "💾 Baixar Base Histórica",
+                        data=xlsx_base,
+                        file_name=f"base_historica_conciliacao_{datetime.now().strftime('%Y-%m-%d')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True,
+                        type="primary",
+                    )
+                except Exception as e:
+                    st.caption(f"Erro ao gerar XLSX: {e}")
+
+        col_h3, col_h4 = st.columns([1, 1])
+        with col_h3:
+            with st.expander("📤 Carregar base histórica existente"):
+                st.caption("Sobrescreve a base atual. Use essa opção no início do dia para carregar a base do time.")
+                xlsx_base_upload = st.file_uploader(
+                    "Base histórica (XLSX)",
+                    type=["xlsx"],
+                    key="base_historica_upload",
+                    label_visibility="collapsed",
                 )
-            except Exception as e:
-                st.caption(f"Erro ao gerar XLSX: {e}")
+                if xlsx_base_upload is not None and st.session_state.get("last_base_loaded") != xlsx_base_upload.name:
+                    try:
+                        df_hist = processar_xlsx(xlsx_base_upload.read())
+                        st.session_state["df"] = df_hist
+                        st.session_state["origem"] = f"Base histórica: {xlsx_base_upload.name}"
+                        st.session_state["last_base_loaded"] = xlsx_base_upload.name
+                        st.success(f"✓ Base carregada: {len(df_hist)} transferências")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Erro ao carregar: {e}")
 
-    col_h3, col_h4 = st.columns([1, 1])
-    with col_h3:
-        with st.expander("📤 Carregar base histórica existente"):
-            st.caption("Sobrescreve a base atual. Use essa opção no início do dia para carregar a base do time.")
-            xlsx_base_upload = st.file_uploader(
-                "Base histórica (XLSX)",
-                type=["xlsx"],
-                key="base_historica_upload",
+        with col_h4:
+            with st.expander("🗑️ Limpar base"):
+                st.caption("⚠️ Apaga tudo. Ação irreversível (mas você pode recarregar o XLSX).")
+                if st.button("🗑️ Limpar tudo e recomeçar", use_container_width=True):
+                    for k in ["df", "xlsx_bytes", "origem", "status_click", "last_base_loaded", "modo_xlsx_pronto"]:
+                        if k in st.session_state:
+                            del st.session_state[k]
+                    st.success("Base limpa!")
+                    st.rerun()
+
+
+    # ============================================================
+    # UPLOAD DE NOVOS ARQUIVOS (para MESCLAR na base)
+    # ============================================================
+    with st.container(border=True):
+        st.markdown("### 📂 Adicionar novos arquivos")
+        base_msg = "**Mesclar** com a base existente" if "df" in st.session_state else "**Começar uma nova base**"
+        st.caption(
+            f"Suba PDFs Repom + MOTZ + ATUA para {base_msg}. "
+            f"Linhas duplicadas (mesmo contrato + mesmo valor + mesma data) serão ignoradas automaticamente."
+        )
+
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            if LOGO_REPOM:
+                st.markdown(
+                    f'<div style="display:flex;align-items:center;justify-content:center;'
+                    f'height:60px;background:#FFFFFF;border-radius:8px;padding:6px;margin-bottom:8px;">'
+                    f'<img src="{LOGO_REPOM}" style="max-height:48px;max-width:100%;object-fit:contain;"></div>',
+                    unsafe_allow_html=True,
+                )
+            st.markdown('<div style="text-align:center;font-weight:500;margin-bottom:4px;">PDFs Repom</div>', unsafe_allow_html=True)
+            pdfs = st.file_uploader(
+                "Transferências bancárias",
+                type=["pdf"],
+                accept_multiple_files=True,
+                key="pdfs",
                 label_visibility="collapsed",
             )
-            if xlsx_base_upload is not None and st.session_state.get("last_base_loaded") != xlsx_base_upload.name:
-                try:
-                    df_hist = processar_xlsx(xlsx_base_upload.read())
-                    st.session_state["df"] = df_hist
-                    st.session_state["origem"] = f"Base histórica: {xlsx_base_upload.name}"
-                    st.session_state["last_base_loaded"] = xlsx_base_upload.name
-                    st.success(f"✓ Base carregada: {len(df_hist)} transferências")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Erro ao carregar: {e}")
+            if pdfs:
+                st.caption(f"✓ {len(pdfs)} PDF(s)")
 
-    with col_h4:
-        with st.expander("🗑️ Limpar base"):
-            st.caption("⚠️ Apaga tudo. Ação irreversível (mas você pode recarregar o XLSX).")
-            if st.button("🗑️ Limpar tudo e recomeçar", use_container_width=True):
-                for k in ["df", "xlsx_bytes", "origem", "status_click", "last_base_loaded", "modo_xlsx_pronto"]:
-                    if k in st.session_state:
-                        del st.session_state[k]
-                st.success("Base limpa!")
-                st.rerun()
-
-
-# ============================================================
-# UPLOAD DE NOVOS ARQUIVOS (para MESCLAR na base)
-# ============================================================
-with st.container(border=True):
-    st.markdown("### 📂 Adicionar novos arquivos")
-    base_msg = "**Mesclar** com a base existente" if "df" in st.session_state else "**Começar uma nova base**"
-    st.caption(
-        f"Suba PDFs Repom + MOTZ + ATUA para {base_msg}. "
-        f"Linhas duplicadas (mesmo contrato + mesmo valor + mesma data) serão ignoradas automaticamente."
-    )
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        if LOGO_REPOM:
-            st.markdown(
-                f'<div style="display:flex;align-items:center;justify-content:center;'
-                f'height:60px;background:#FFFFFF;border-radius:8px;padding:6px;margin-bottom:8px;">'
-                f'<img src="{LOGO_REPOM}" style="max-height:48px;max-width:100%;object-fit:contain;"></div>',
-                unsafe_allow_html=True,
+        with col2:
+            if LOGO_MOTZ:
+                st.markdown(
+                    f'<div style="display:flex;align-items:center;justify-content:center;'
+                    f'height:60px;background:#FFFFFF;border-radius:8px;padding:6px;margin-bottom:8px;">'
+                    f'<img src="{LOGO_MOTZ}" style="max-height:48px;max-width:100%;object-fit:contain;"></div>',
+                    unsafe_allow_html=True,
+                )
+            st.markdown('<div style="text-align:center;font-weight:500;margin-bottom:4px;">Arquivo MOTZ</div>', unsafe_allow_html=True)
+            motz = st.file_uploader(
+                "export*.xlsx",
+                type=["xlsx"],
+                key="motz",
+                label_visibility="collapsed",
             )
-        st.markdown('<div style="text-align:center;font-weight:500;margin-bottom:4px;">PDFs Repom</div>', unsafe_allow_html=True)
-        pdfs = st.file_uploader(
-            "Transferências bancárias",
-            type=["pdf"],
-            accept_multiple_files=True,
-            key="pdfs",
-            label_visibility="collapsed",
-        )
-        if pdfs:
-            st.caption(f"✓ {len(pdfs)} PDF(s)")
+            if motz:
+                st.caption(f"✓ {motz.name}")
 
-    with col2:
-        if LOGO_MOTZ:
-            st.markdown(
-                f'<div style="display:flex;align-items:center;justify-content:center;'
-                f'height:60px;background:#FFFFFF;border-radius:8px;padding:6px;margin-bottom:8px;">'
-                f'<img src="{LOGO_MOTZ}" style="max-height:48px;max-width:100%;object-fit:contain;"></div>',
-                unsafe_allow_html=True,
+        with col3:
+            if LOGO_ATUA:
+                st.markdown(
+                    f'<div style="display:flex;align-items:center;justify-content:center;'
+                    f'height:60px;background:#FFFFFF;border-radius:8px;padding:6px;margin-bottom:8px;">'
+                    f'<img src="{LOGO_ATUA}" style="max-height:48px;max-width:100%;object-fit:contain;"></div>',
+                    unsafe_allow_html=True,
+                )
+            st.markdown('<div style="text-align:center;font-weight:500;margin-bottom:4px;">Cobrança ATUA</div>', unsafe_allow_html=True)
+            atua = st.file_uploader(
+                "*cobranca*.xls",
+                type=["xls", "xlsx"],
+                key="atua",
+                label_visibility="collapsed",
             )
-        st.markdown('<div style="text-align:center;font-weight:500;margin-bottom:4px;">Arquivo MOTZ</div>', unsafe_allow_html=True)
-        motz = st.file_uploader(
-            "export*.xlsx",
-            type=["xlsx"],
-            key="motz",
-            label_visibility="collapsed",
-        )
-        if motz:
-            st.caption(f"✓ {motz.name}")
+            if atua:
+                st.caption(f"✓ {atua.name}")
 
-    with col3:
-        if LOGO_ATUA:
-            st.markdown(
-                f'<div style="display:flex;align-items:center;justify-content:center;'
-                f'height:60px;background:#FFFFFF;border-radius:8px;padding:6px;margin-bottom:8px;">'
-                f'<img src="{LOGO_ATUA}" style="max-height:48px;max-width:100%;object-fit:contain;"></div>',
-                unsafe_allow_html=True,
-            )
-        st.markdown('<div style="text-align:center;font-weight:500;margin-bottom:4px;">Cobrança ATUA</div>', unsafe_allow_html=True)
-        atua = st.file_uploader(
-            "*cobranca*.xls",
-            type=["xls", "xlsx"],
-            key="atua",
-            label_visibility="collapsed",
-        )
-        if atua:
-            st.caption(f"✓ {atua.name}")
+        col_b1, _ = st.columns([1, 3])
+        with col_b1:
+            rodar_btn = st.button("🔄 Processar e mesclar", type="primary", use_container_width=True, disabled=not (pdfs and motz and atua))
 
-    col_b1, _ = st.columns([1, 3])
-    with col_b1:
-        rodar_btn = st.button("🔄 Processar e mesclar", type="primary", use_container_width=True, disabled=not (pdfs and motz and atua))
-
-
-# ============================================================
-# (bloco "Carregar XLSX pronto" agora está integrado ao topo)
-# ============================================================
-
-
-# ============================================================
-# Rodar conciliação
-# ============================================================
-if rodar_btn and pdfs and motz and atua:
-    with st.spinner("Rodando conciliação... isso pode levar 30s-2min dependendo do tamanho dos arquivos."):
-        try:
-            pdfs_data = [(f.name, f.read()) for f in pdfs]
-            motz_data = motz.read()
-            atua_data = atua.read()
-
-            xlsx_bytes, log = rodar_conciliacao(
-                pdfs_data, motz_data, atua_data, motz.name, atua.name
-            )
-            df_novo = processar_xlsx(xlsx_bytes)
-
-            # MESCLAR com a base existente (deduplicação inteligente)
-            df_base_atual = st.session_state.get("df")
-            df_final, stats = mesclar_dataframes(df_base_atual, df_novo)
-
-            st.session_state["df"] = df_final
-            st.session_state["xlsx_bytes"] = xlsx_bytes  # último processamento bruto
-            st.session_state["origem"] = (
-                f"Mesclado às {datetime.now().strftime('%H:%M:%S')} · "
-                f"{len(pdfs_data)} PDFs + {motz.name} + {atua.name}"
-            )
-            st.session_state["log"] = log
-
-            # Relatório de mesclagem
-            if df_base_atual is None or len(df_base_atual) == 0:
-                st.success(f"✓ Base inicial criada · {stats['total']} transferências")
-            else:
-                msg_partes = [f"✓ Mesclagem concluída!"]
-                if stats["novas"] > 0:
-                    msg_partes.append(f"📥 **{stats['novas']} novas** transferências adicionadas")
-                if stats["duplicadas"] > 0:
-                    msg_partes.append(f"♻️ **{stats['duplicadas']} duplicadas** ignoradas (já existiam)")
-                msg_partes.append(f"📊 **Total agora:** {stats['total']} transferências")
-                st.success("  ·  ".join(msg_partes))
-
-            st.info("💡 Não esqueça de **baixar a base histórica atualizada** no topo da página e compartilhar com o time!", icon="💾")
-
-        except Exception as e:
-            st.error(f"Erro na conciliação:\n\n{str(e)}")
-            st.stop()
-
-
-# ============================================================
-# Dashboard (quando houver dados)
-# ============================================================
-if "df" in st.session_state:
-    df = st.session_state["df"]
-    st.divider()
-
-    # Inicializar filtro clicável no session_state
-    if "status_click" not in st.session_state:
-        st.session_state["status_click"] = None  # None = sem filtro
-
-    # Cabeçalho do dashboard
-    col_a, col_b = st.columns([3, 1])
-    with col_a:
-        st.caption(f"🟢 {st.session_state.get('origem', '')}")
-    with col_b:
-        if "xlsx_bytes" in st.session_state:
-            st.download_button(
-                "⬇️ XLSX do último processamento",
-                data=st.session_state["xlsx_bytes"],
-                file_name=f"ultimo_processamento_{datetime.now().strftime('%Y-%m-%d_%H%M')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-                help="XLSX da última rodada (apenas os arquivos processados agora). Para a base histórica completa, use o botão no topo.",
-            )
 
     # ============================================================
-    # 📥 BOTÃO BAIXA DE TÍTULOS NO ATUA
-    # Gera CSV no formato exato pra subir no ATUA e quitar os títulos
+    # (bloco "Carregar XLSX pronto" agora está integrado ao topo)
     # ============================================================
-    def _gerar_csv_baixa_atua(df_in):
-        """Gera CSV no formato exato da planilha modelo do ATUA pra baixa de títulos."""
-        df_f = df_in.copy()
 
-        # Filtrar: tem Data Transferência E Valor Transferido > 0
-        if "Data Transferência" in df_f.columns:
-            df_f = df_f[df_f["Data Transferência"].notna()]
-        df_f = df_f[df_f["Valor Transferido"].fillna(0) > 0]
 
-        if df_f.empty:
-            return None, 0
-
-        # Decidir Tipo Parcela: A (adiantamento) ou S (saldo)
-        # Cada linha do dashboard é UMA transferência. Comparamos o valor
-        # transferido com Vlr. Adiantamento e Vlr. Saldo do contrato.
-        def _decidir_tipo(row):
-            vt = float(row.get("Valor Transferido", 0) or 0)
-            va = float(row.get("Vlr. Adiantamento", 0) or 0)
-            vs = float(row.get("Vlr. Saldo", 0) or 0)
-            # Tolerância de R$ 0,50 pra arredondamento
-            if abs(vt - va) <= 0.50:
-                return "A"
-            if abs(vt - vs) <= 0.50:
-                return "S"
-            # Fallback: o que estiver mais perto
-            return "A" if abs(vt - va) < abs(vt - vs) else "S"
-
-        df_f["_tipo"] = df_f.apply(_decidir_tipo, axis=1)
-
-        # Quebra/Desconto: pega vl_quebra_avaria e soma R$1,00 fixo se for saldo (Repom).
-        # Esse R$1,00 é o desconto padrão da Repom em toda baixa de saldo.
-        def _calc_quebra_final(row):
-            base = 0.0
+    # ============================================================
+    # Rodar conciliação
+    # ============================================================
+    if rodar_btn and pdfs and motz and atua:
+        with st.spinner("Rodando conciliação... isso pode levar 30s-2min dependendo do tamanho dos arquivos."):
             try:
-                base = float(row.get("vl_quebra_avaria", 0) or 0)
-            except (ValueError, TypeError):
-                base = 0.0
-            if row.get("_tipo") == "S":
-                base += 1.0
-            return base
+                pdfs_data = [(f.name, f.read()) for f in pdfs]
+                motz_data = motz.read()
+                atua_data = atua.read()
 
-        df_f["_quebra_final"] = df_f.apply(_calc_quebra_final, axis=1)
+                xlsx_bytes, log = rodar_conciliacao(
+                    pdfs_data, motz_data, atua_data, motz.name, atua.name
+                )
+                df_novo = processar_xlsx(xlsx_bytes)
 
-        # Formatadores no padrão ATUA:
-        #   - Zero -> "0" (sem vírgula)
-        #   - Inteiro -> "1000" (sem ,00)
-        #   - Com centavos -> "3369,96" (vírgula como decimal)
-        def _fmt_atua(v):
-            """Formata número no padrão ATUA: omite ,00 se for inteiro."""
-            if pd.isna(v) or v == "" or v is None:
-                return "0"
-            try:
-                f = float(v)
-            except (ValueError, TypeError):
-                return "0"
-            if f == 0:
-                return "0"
-            # Se for inteiro exato, mostra sem decimal
-            if f == int(f):
-                return str(int(f))
-            # Senão, formata com vírgula
-            return f"{f:.2f}".replace(".", ",")
+                # MESCLAR com a base existente (deduplicação inteligente)
+                df_base_atual = st.session_state.get("df")
+                df_final, stats = mesclar_dataframes(df_base_atual, df_novo)
 
-        def _fmt_int(v):
-            """Inteiro puro pra IDs (Nr. CTRC, Nr. Fatura)."""
-            if pd.isna(v) or v == "":
-                return ""
-            try:
-                return str(int(float(v)))
-            except (ValueError, TypeError):
-                return str(v).strip()
+                st.session_state["df"] = df_final
+                st.session_state["xlsx_bytes"] = xlsx_bytes  # último processamento bruto
+                st.session_state["origem"] = (
+                    f"Mesclado às {datetime.now().strftime('%H:%M:%S')} · "
+                    f"{len(pdfs_data)} PDFs + {motz.name} + {atua.name}"
+                )
+                st.session_state["log"] = log
 
-        # Coluna do nr_titulo ATUA (compatível com v4.3+ que tem coluna separada)
-        # Nr. Fatura no ATUA = nr_titulo ATUA (NÃO é a NFe do MOTZ)
-        col_titulo_atua = "nr_titulo ATUA" if "nr_titulo ATUA" in df_f.columns else None
+                # Relatório de mesclagem
+                if df_base_atual is None or len(df_base_atual) == 0:
+                    st.success(f"✓ Base inicial criada · {stats['total']} transferências")
+                else:
+                    msg_partes = [f"✓ Mesclagem concluída!"]
+                    if stats["novas"] > 0:
+                        msg_partes.append(f"📥 **{stats['novas']} novas** transferências adicionadas")
+                    if stats["duplicadas"] > 0:
+                        msg_partes.append(f"♻️ **{stats['duplicadas']} duplicadas** ignoradas (já existiam)")
+                    msg_partes.append(f"📊 **Total agora:** {stats['total']} transferências")
+                    st.success("  ·  ".join(msg_partes))
 
-        # Montar saída no formato ATUA
-        # IMPORTANTE: zeros viram "0" e inteiros sem decimal (padrão exato do ATUA)
-        out = pd.DataFrame({
-            "Nr. CTRC": df_f.get("nr_ctrc ATUA", pd.Series(dtype=str)).apply(_fmt_int),
-            "Serie": "1",
-            "Valor Pago": df_f["Valor Transferido"].apply(_fmt_atua),
-            "Valor Desconto": "0",
-            "Valor de Juros": "0",
-            "Valor Desconto Quebra": df_f["_quebra_final"].apply(_fmt_atua),
-            "Valor Acres. Quebra": "0",
-            "Tipo Parcela (A = Adiantamento / S = Saldo)": df_f["_tipo"],
-            "Nr. Fatura": (
-                df_f[col_titulo_atua].apply(_fmt_int)
-                if col_titulo_atua
-                else pd.Series([""] * len(df_f))
-            ),
-        })
+                st.info("💡 Não esqueça de **baixar a base histórica atualizada** no topo da página e compartilhar com o time!", icon="💾")
 
-        # Remover linhas sem CTRC ou sem Fatura (não dá pra baixar no ATUA)
-        out = out[(out["Nr. CTRC"] != "") & (out["Nr. Fatura"] != "")]
+            except Exception as e:
+                st.error(f"Erro na conciliação:\n\n{str(e)}")
+                st.stop()
 
-        if out.empty:
-            return None, 0
 
-        # Exportar com separador ; e encoding latin-1 (formato ATUA)
-        csv_str = out.to_csv(sep=";", index=False, lineterminator="\r\n")
-        return csv_str.encode("latin-1", errors="replace"), len(out)
+    # ============================================================
+    # Dashboard (quando houver dados)
+    # ============================================================
+    if "df" in st.session_state:
+        df = st.session_state["df"]
+        st.divider()
 
-    # ---- Renderizar botão ----
-    with st.container(border=True):
-        col_x1, col_x2 = st.columns([3, 1])
-        with col_x1:
-            st.markdown("##### 📥 Baixa de Títulos no ATUA")
-            st.caption(
-                "CSV no formato exato pra subir no ATUA e quitar os títulos. "
-                "Inclui apenas linhas com **Data Transferência** e **Valor Transferido** preenchidos. "
-                "Cada transferência (adto e saldo) vira uma linha separada com tipo A/S."
-            )
-        with col_x2:
-            csv_atua, qtd_linhas = _gerar_csv_baixa_atua(df)
-            if csv_atua:
+        # Inicializar filtro clicável no session_state
+        if "status_click" not in st.session_state:
+            st.session_state["status_click"] = None  # None = sem filtro
+
+        # Cabeçalho do dashboard
+        col_a, col_b = st.columns([3, 1])
+        with col_a:
+            st.caption(f"🟢 {st.session_state.get('origem', '')}")
+        with col_b:
+            if "xlsx_bytes" in st.session_state:
                 st.download_button(
-                    f"📥 Baixa ATUA · {qtd_linhas} linhas",
-                    data=csv_atua,
-                    file_name="planilha_padrao .csv",
+                    "⬇️ XLSX do último processamento",
+                    data=st.session_state["xlsx_bytes"],
+                    file_name=f"ultimo_processamento_{datetime.now().strftime('%Y-%m-%d_%H%M')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    help="XLSX da última rodada (apenas os arquivos processados agora). Para a base histórica completa, use o botão no topo.",
+                )
+
+        # ============================================================
+        # 📥 BOTÃO BAIXA DE TÍTULOS NO ATUA
+        # Gera CSV no formato exato pra subir no ATUA e quitar os títulos
+        # ============================================================
+        def _gerar_csv_baixa_atua(df_in):
+            """Gera CSV no formato exato da planilha modelo do ATUA pra baixa de títulos."""
+            df_f = df_in.copy()
+
+            # Filtrar: tem Data Transferência E Valor Transferido > 0
+            if "Data Transferência" in df_f.columns:
+                df_f = df_f[df_f["Data Transferência"].notna()]
+            df_f = df_f[df_f["Valor Transferido"].fillna(0) > 0]
+
+            if df_f.empty:
+                return None, 0
+
+            # Decidir Tipo Parcela: A (adiantamento) ou S (saldo)
+            # Cada linha do dashboard é UMA transferência. Comparamos o valor
+            # transferido com Vlr. Adiantamento e Vlr. Saldo do contrato.
+            def _decidir_tipo(row):
+                vt = float(row.get("Valor Transferido", 0) or 0)
+                va = float(row.get("Vlr. Adiantamento", 0) or 0)
+                vs = float(row.get("Vlr. Saldo", 0) or 0)
+                # Tolerância de R$ 0,50 pra arredondamento
+                if abs(vt - va) <= 0.50:
+                    return "A"
+                if abs(vt - vs) <= 0.50:
+                    return "S"
+                # Fallback: o que estiver mais perto
+                return "A" if abs(vt - va) < abs(vt - vs) else "S"
+
+            df_f["_tipo"] = df_f.apply(_decidir_tipo, axis=1)
+
+            # Quebra/Desconto: pega vl_quebra_avaria e soma R$1,00 fixo se for saldo (Repom).
+            # Esse R$1,00 é o desconto padrão da Repom em toda baixa de saldo.
+            def _calc_quebra_final(row):
+                base = 0.0
+                try:
+                    base = float(row.get("vl_quebra_avaria", 0) or 0)
+                except (ValueError, TypeError):
+                    base = 0.0
+                if row.get("_tipo") == "S":
+                    base += 1.0
+                return base
+
+            df_f["_quebra_final"] = df_f.apply(_calc_quebra_final, axis=1)
+
+            # Formatadores no padrão ATUA:
+            #   - Zero -> "0" (sem vírgula)
+            #   - Inteiro -> "1000" (sem ,00)
+            #   - Com centavos -> "3369,96" (vírgula como decimal)
+            def _fmt_atua(v):
+                """Formata número no padrão ATUA: omite ,00 se for inteiro."""
+                if pd.isna(v) or v == "" or v is None:
+                    return "0"
+                try:
+                    f = float(v)
+                except (ValueError, TypeError):
+                    return "0"
+                if f == 0:
+                    return "0"
+                # Se for inteiro exato, mostra sem decimal
+                if f == int(f):
+                    return str(int(f))
+                # Senão, formata com vírgula
+                return f"{f:.2f}".replace(".", ",")
+
+            def _fmt_int(v):
+                """Inteiro puro pra IDs (Nr. CTRC, Nr. Fatura)."""
+                if pd.isna(v) or v == "":
+                    return ""
+                try:
+                    return str(int(float(v)))
+                except (ValueError, TypeError):
+                    return str(v).strip()
+
+            # Coluna do nr_titulo ATUA (compatível com v4.3+ que tem coluna separada)
+            # Nr. Fatura no ATUA = nr_titulo ATUA (NÃO é a NFe do MOTZ)
+            col_titulo_atua = "nr_titulo ATUA" if "nr_titulo ATUA" in df_f.columns else None
+
+            # Montar saída no formato ATUA
+            # IMPORTANTE: zeros viram "0" e inteiros sem decimal (padrão exato do ATUA)
+            out = pd.DataFrame({
+                "Nr. CTRC": df_f.get("nr_ctrc ATUA", pd.Series(dtype=str)).apply(_fmt_int),
+                "Serie": "1",
+                "Valor Pago": df_f["Valor Transferido"].apply(_fmt_atua),
+                "Valor Desconto": "0",
+                "Valor de Juros": "0",
+                "Valor Desconto Quebra": df_f["_quebra_final"].apply(_fmt_atua),
+                "Valor Acres. Quebra": "0",
+                "Tipo Parcela (A = Adiantamento / S = Saldo)": df_f["_tipo"],
+                "Nr. Fatura": (
+                    df_f[col_titulo_atua].apply(_fmt_int)
+                    if col_titulo_atua
+                    else pd.Series([""] * len(df_f))
+                ),
+            })
+
+            # Remover linhas sem CTRC ou sem Fatura (não dá pra baixar no ATUA)
+            out = out[(out["Nr. CTRC"] != "") & (out["Nr. Fatura"] != "")]
+
+            if out.empty:
+                return None, 0
+
+            # Exportar com separador ; e encoding latin-1 (formato ATUA)
+            csv_str = out.to_csv(sep=";", index=False, lineterminator="\r\n")
+            return csv_str.encode("latin-1", errors="replace"), len(out)
+
+        # ---- Renderizar botão ----
+        with st.container(border=True):
+            col_x1, col_x2 = st.columns([3, 1])
+            with col_x1:
+                st.markdown("##### 📥 Baixa de Títulos no ATUA")
+                st.caption(
+                    "CSV no formato exato pra subir no ATUA e quitar os títulos. "
+                    "Inclui apenas linhas com **Data Transferência** e **Valor Transferido** preenchidos. "
+                    "Cada transferência (adto e saldo) vira uma linha separada com tipo A/S."
+                )
+            with col_x2:
+                csv_atua, qtd_linhas = _gerar_csv_baixa_atua(df)
+                if csv_atua:
+                    st.download_button(
+                        f"📥 Baixa ATUA · {qtd_linhas} linhas",
+                        data=csv_atua,
+                        file_name="planilha_padrao .csv",
+                        mime="text/csv",
+                        use_container_width=True,
+                        type="primary",
+                        help="CSV com separador ;, decimal vírgula, encoding latin-1 — formato idêntico ao modelo do ATUA.",
+                    )
+                else:
+                    st.caption("⚠️ Nenhuma linha disponível pra baixa")
+
+        st.info(
+            "**1 linha por transferência Repom** — igual à planilha da skill. "
+            "Se um contrato teve 2 transferências (ex: adto + saldo), aparece 2 vezes. "
+            "As colunas coloridas destacam divergências e saldo em aberto.",
+            icon="ℹ️",
+        )
+
+        # Filtros
+        with st.container(border=True):
+            datas_validas = df["Data Emissão"].dropna()
+            if len(datas_validas) > 0:
+                date_min = datas_validas.min().date()
+                date_max = datas_validas.max().date()
+            else:
+                date_min = date_max = datetime.now().date()
+
+            # Folga de ±1 ano para o usuário poder escolher qualquer data
+            from datetime import date as _date
+            date_min_widget = _date(date_min.year - 1, 1, 1)
+            date_max_widget = _date(date_max.year + 1, 12, 31)
+
+            col_f1, col_f2, col_f3, col_f4 = st.columns([1, 1, 1, 2])
+            with col_f1:
+                date_from = st.date_input(
+                    "De",
+                    value=date_min,
+                    min_value=date_min_widget,
+                    max_value=date_max_widget,
+                    format="DD/MM/YYYY",
+                    key="date_from_input",
+                )
+            with col_f2:
+                date_to = st.date_input(
+                    "Até",
+                    value=date_max,
+                    min_value=date_min_widget,
+                    max_value=date_max_widget,
+                    format="DD/MM/YYYY",
+                    key="date_to_input",
+                )
+            with col_f3:
+                status_filter = st.selectbox(
+                    "Status",
+                    ["Todos", "OK", "ATUA MAIOR", "ATUA MENOR", "NÃO ENCONTRADO", "Saldo aberto"],
+                    key="status_dropdown",
+                )
+            with col_f4:
+                busca = st.text_input(
+                    "Buscar",
+                    placeholder="contrato, CTRC, motorista, NFe...",
+                    key="busca_input",
+                )
+
+        # Aplicar filtros de data
+        df_f = df.copy()
+        if date_from:
+            df_f = df_f[df_f["Data Emissão"].apply(lambda d: pd.isna(d) or d.date() >= date_from)]
+        if date_to:
+            df_f = df_f[df_f["Data Emissão"].apply(lambda d: pd.isna(d) or d.date() <= date_to)]
+
+        df_periodo = df_f.copy()  # para KPIs do período (sem filtro de status)
+        # v4.9: marca linhas com mesmo nr_titulo ATUA (ATUA MAIOR) — origem = mais antiga
+        df_periodo = marcar_duplicacoes_atua(df_periodo)
+        df_f = marcar_duplicacoes_atua(df_f)
+
+        # ============================================================
+        # Combinar filtro do dropdown + filtro clicável
+        # Regra: se o usuário clicou num card/fatia, isso tem prioridade sobre o dropdown "Todos"
+        # Se o dropdown ≠ "Todos" E clicou num card, o clique vence (sincroniza)
+        # ============================================================
+        filtro_ativo = st.session_state.get("status_click")
+        if status_filter != "Todos":
+            filtro_ativo = status_filter  # dropdown vence se não for "Todos"
+
+        if filtro_ativo == "Saldo aberto":
+            df_f = df_f[df_f["Situação Saldo"] == "Aberto"]
+        elif filtro_ativo and filtro_ativo != "Todos":
+            df_f = df_f[df_f["Status"] == filtro_ativo]
+
+        if busca:
+            b = busca.lower()
+            mask = (
+                df_f["Contrato"].astype(str).str.lower().str.contains(b, na=False) |
+                df_f["nr_titulo ATUA"].astype(str).str.lower().str.contains(b, na=False) |
+                df_f["nr_ctrc ATUA"].astype(str).str.lower().str.contains(b, na=False) |
+                df_f["Motorista"].astype(str).str.lower().str.contains(b, na=False) |
+                df_f["NFe"].astype(str).str.lower().str.contains(b, na=False) |
+                df_f["Cliente"].astype(str).str.lower().str.contains(b, na=False) |
+                df_f["Nº Carta Frete"].astype(str).str.lower().str.contains(b, na=False) |
+                df_f["Nº Romaneio"].astype(str).str.lower().str.contains(b, na=False)
+            )
+            df_f = df_f[mask]
+
+        # ============================================================
+        # KPIs (sobre df_periodo, sem filtro de status)
+        # Deduplicar por contrato para somas (Frete/ATUA se repetem em 2+ transferências)
+        # ============================================================
+        total_linhas = len(df_periodo)
+        df_unicos = df_periodo.drop_duplicates(subset=["Contrato"]) if total_linhas > 0 else df_periodo
+        total = len(df_unicos)  # nº de contratos únicos
+
+        ok_n = (df_unicos["Status"] == "OK").sum()
+        maior_n = (df_unicos["Status"] == "ATUA MAIOR").sum()
+        menor_n = (df_unicos["Status"] == "ATUA MENOR").sum()
+        ne_n = (df_unicos["Status"] == "NÃO ENCONTRADO").sum()
+        aberto_n = (df_unicos["Situação Saldo"] == "Aberto").sum()
+
+        soma_motz = df_unicos["Vlr. Frete Líquido"].fillna(0).sum()
+        # v4.9: na soma do vl_total ATUA, exclui as linhas marcadas como duplicadas
+        # (mesmo nr_titulo ATUA em + de 1 linha Repom → conta só a origem)
+        if "_atua_duplicado" in df_unicos.columns:
+            soma_atua = df_unicos[df_unicos["_atua_duplicado"] != True]["vl_total ATUA"].fillna(0).sum()
+        else:
+            soma_atua = df_unicos["vl_total ATUA"].fillna(0).sum()
+        # Valor Transferido: SOMA TODAS as linhas (cada linha = 1 transferência)
+        soma_transf = df_periodo["Valor Transferido"].fillna(0).sum()
+        contratos_com_transf = df_periodo[df_periodo["Valor Transferido"].fillna(0) > 0]["Contrato"].nunique()
+        soma_saldo_aberto = df_unicos[df_unicos["Situação Saldo"] == "Aberto"]["Vlr. Saldo"].fillna(0).sum()
+
+        indice = (ok_n / total * 100) if total else 0
+
+        col_k1, col_k2, col_k3, col_k4, col_k5 = st.columns(5)
+        with col_k1:
+            st.metric("Índice conciliação", f"{indice:.1f}%".replace(".", ","), f"{ok_n} de {total} OK")
+        with col_k2:
+            st.metric("Soma MOTZ", fmt_mi(soma_motz), help="Frete líquido (sem duplicar por transferência)")
+        with col_k3:
+            diff = soma_atua - soma_motz
+            st.metric("Soma ATUA", fmt_mi(soma_atua), delta=fmt_mi(diff), delta_color="inverse")
+        with col_k4:
+            st.metric("Transferido Repom", fmt_mi(soma_transf), f"{contratos_com_transf} contratos c/ PDF")
+        with col_k5:
+            st.metric("Saldo em aberto", fmt_mi(soma_saldo_aberto), f"{aberto_n} contratos")
+
+        # ============================================================
+        # Distribuição clicável (cards + gráfico de pizza)
+        # ============================================================
+        st.markdown("### Distribuição por status")
+        st.caption("👆 Clique em um card ou numa fatia do gráfico para filtrar a tabela. Clique de novo para limpar.")
+
+        def pct(n):
+            return f"{n/total*100:.1f}%".replace(".", ",") if total else "0,0%"
+
+        # ---------- Cards clicáveis (5 colunas) ----------
+        cards = [
+            ("OK",             ok_n,     "card-ok",      "🟢"),
+            ("ATUA MAIOR",     maior_n,  "card-maior",   "🔴"),
+            ("ATUA MENOR",     menor_n,  "card-menor",   "🔵"),
+            ("NÃO ENCONTRADO", ne_n,     "card-ne",      "🟡"),
+            ("Saldo aberto",   aberto_n, "card-aberto",  "🟣"),
+        ]
+
+        cols_cards = st.columns(5)
+        filtro_atual_clique = st.session_state.get("status_click")
+
+        for idx, (label, n, css_class, emoji) in enumerate(cards):
+            with cols_cards[idx]:
+                ativo = (filtro_atual_clique == label)
+                classe_final = f"{css_class} card-active" if ativo else css_class
+                st.markdown(f'<div class="{classe_final}">', unsafe_allow_html=True)
+                if st.button(
+                    f"{emoji}  **{label}**\n\n{n} · {pct(n)}",
+                    key=f"card_{label}",
+                    use_container_width=True,
+                ):
+                    # Toggle: se já tá selecionado, desseleciona
+                    if st.session_state.get("status_click") == label:
+                        st.session_state["status_click"] = None
+                    else:
+                        st.session_state["status_click"] = label
+                    st.rerun()
+                st.markdown('</div>', unsafe_allow_html=True)
+
+        # Aviso de filtro ativo
+        if filtro_atual_clique and status_filter == "Todos":
+            st.markdown(
+                f'<div class="filter-hint">🎯 Filtro ativo pelo card: <b>{filtro_atual_clique}</b> '
+                f'· Exibindo {len(df_f)} de {total} contratos. Clique no mesmo card para limpar.</div>',
+                unsafe_allow_html=True,
+            )
+
+        # ---------- Gráfico de pizza (abaixo dos cards) ----------
+        col_g1, col_g2 = st.columns([1, 1])
+
+        with col_g1:
+            st.markdown("**Distribuição visual**")
+            dist_data = pd.DataFrame([
+                {"Status": "OK",             "Qtd": ok_n,    "Cor": COLORS["OK"]["plot"]},
+                {"Status": "ATUA MAIOR",     "Qtd": maior_n, "Cor": COLORS["ATUA MAIOR"]["plot"]},
+                {"Status": "ATUA MENOR",     "Qtd": menor_n, "Cor": COLORS["ATUA MENOR"]["plot"]},
+                {"Status": "NÃO ENCONTRADO", "Qtd": ne_n,    "Cor": COLORS["NAO ENCONTRADO"]["plot"]},
+                {"Status": "Saldo aberto",   "Qtd": aberto_n,"Cor": COLORS["SALDO ABERTO"]["plot"]},
+            ])
+            dist_data = dist_data[dist_data["Qtd"] > 0]  # não plota fatias vazias
+
+            if len(dist_data) > 0:
+                fig = px.pie(
+                    dist_data,
+                    values="Qtd",
+                    names="Status",
+                    color="Status",
+                    color_discrete_map={r["Status"]: r["Cor"] for _, r in dist_data.iterrows()},
+                    hole=0.4,
+                )
+                fig.update_traces(
+                    textposition="inside",
+                    textinfo="percent+label",
+                    hovertemplate="<b>%{label}</b><br>%{value} contratos<br>%{percent}<extra></extra>",
+                    pull=[0.08 if s == filtro_atual_clique else 0 for s in dist_data["Status"]],
+                )
+                fig.update_layout(
+                    height=280,
+                    margin=dict(t=10, b=10, l=10, r=10),
+                    showlegend=True,
+                    legend=dict(orientation="v", yanchor="middle", y=0.5, xanchor="left", x=1.05, font=dict(size=11, color="#EAEAEA")),
+                    paper_bgcolor="#1A1A1A",
+                    plot_bgcolor="#1A1A1A",
+                    font=dict(color="#EAEAEA"),
+                )
+                # Eventos de clique no gráfico
+                evento = st.plotly_chart(fig, use_container_width=True, on_select="rerun", key="pie_chart")
+                if evento and evento.get("selection") and evento["selection"].get("points"):
+                    ponto = evento["selection"]["points"][0]
+                    status_clicado = ponto.get("label")
+                    if status_clicado:
+                        # Toggle
+                        if st.session_state.get("status_click") == status_clicado:
+                            st.session_state["status_click"] = None
+                        else:
+                            st.session_state["status_click"] = status_clicado
+                        st.rerun()
+            else:
+                st.caption("Sem dados para plotar")
+
+        with col_g2:
+            st.markdown("**Frete líquido emitido por dia**")
+            df_chart = df_unicos.dropna(subset=["Data Emissão"]).copy()
+            if len(df_chart) > 0:
+                df_chart["Dia"] = df_chart["Data Emissão"].dt.date
+                daily = df_chart.groupby("Dia")["Vlr. Frete Líquido"].sum().reset_index()
+                daily.columns = ["Data", "Frete Líquido"]
+                st.bar_chart(daily, x="Data", y="Frete Líquido", height=280, color="#378ADD")
+            else:
+                st.caption("Sem dados de data para o período")
+
+        # ============================================================
+        # Tabela (com cores por linha)
+        # ============================================================
+        st.markdown(f"**Transferências · {len(df_f)} linhas exibidas** " +
+                    (f"(filtro: {filtro_ativo})" if filtro_ativo and filtro_ativo != "Todos" else ""))
+
+        # ---- Multi-select para escolher quais colunas exibir ----
+        # Seleção padrão (mais usadas) — usuário pode expandir
+        PADRAO_VISIVEIS = [
+            "Cliente", "Contrato", "NFe", "nr_titulo ATUA", "Motorista",
+            "Data Emissão", "Vlr. Frete Líquido", "Vlr. Saldo",
+            "vl_total ATUA", "Diferença MOTZ×ATUA", "Status",
+            "Data Transferência", "Valor Transferido",
+            "Situação Adto", "Situação Saldo",
+        ]
+
+        # Estratégia: usar chave dinâmica para permitir reset pelos botões
+        if "colunas_default" not in st.session_state:
+            st.session_state["colunas_default"] = PADRAO_VISIVEIS
+        if "colunas_version" not in st.session_state:
+            st.session_state["colunas_version"] = 0
+
+        with st.expander("⚙️ Escolher colunas visíveis", expanded=False):
+            col_rst1, col_rst2, _ = st.columns([1, 1, 3])
+            with col_rst1:
+                if st.button("✅ Mostrar todas", key="btn_todas"):
+                    st.session_state["colunas_default"] = list(COLUNAS_OFICIAIS)
+                    st.session_state["colunas_version"] += 1
+                    st.rerun()
+            with col_rst2:
+                if st.button("↺ Padrão", key="btn_padrao"):
+                    st.session_state["colunas_default"] = PADRAO_VISIVEIS
+                    st.session_state["colunas_version"] += 1
+                    st.rerun()
+
+            colunas_escolhidas = st.multiselect(
+                "Selecione as colunas que deseja ver (todas as 22 disponíveis):",
+                options=COLUNAS_OFICIAIS,
+                default=st.session_state["colunas_default"],
+                key=f"colunas_multiselect_v{st.session_state['colunas_version']}",
+            )
+
+        if not colunas_escolhidas:
+            colunas_escolhidas = PADRAO_VISIVEIS
+
+        # Ordenar colunas escolhidas na ORDEM OFICIAL (não na ordem de seleção)
+        colunas_ordenadas = [c for c in COLUNAS_OFICIAIS if c in colunas_escolhidas]
+
+        # Preparar df_show
+        df_show = df_f.copy().sort_values(
+            ["Data Emissão", "Contrato"],
+            ascending=[False, True],
+            na_position="last",
+        )
+
+        # Construir view da tabela
+        df_tabela = df_show[colunas_ordenadas].reset_index(drop=True)
+
+        # Formatadores
+        formatadores = {}
+        for col in colunas_ordenadas:
+            if col in COLUNAS_VALOR:
+                formatadores[col] = lambda v: (
+                    f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                    if pd.notna(v) and v != 0 else ("R$ 0,00" if v == 0 else "—")
+                )
+            elif col in COLUNAS_DATA:
+                formatadores[col] = lambda d: d.strftime("%d/%m/%Y") if pd.notna(d) and isinstance(d, datetime) else "—"
+
+        # Aplicar cores + formatação
+        styler = colorir_linhas_tabela(df_tabela)
+        if formatadores:
+            styler = styler.format(formatadores)
+
+        st.dataframe(styler, use_container_width=True, hide_index=True, height=520)
+
+        # Legenda de cores
+        with st.expander("🎨 Legenda de cores", expanded=False):
+            st.markdown(f"""
+            As cores seguem **exatamente** a planilha MOTZ original (célula por célula):
+
+            - <span class="status-ok">🟢 OK</span> — colunas **Status**, **Diferença MOTZ×ATUA** e **Vlr. Saldo** em verde
+            - <span class="status-maior">🔴 ATUA MAIOR > R$100</span> — mesmas colunas em vermelho (diferença crítica)
+            - <span class="status-menor">🔵 ATUA MAIOR até R$100 / ATUA MENOR</span> — mesmas colunas em azul (diferença pequena)
+            - <span class="status-ne">🟡 NÃO ENCONTRADO</span> — mesmas colunas em amarelo
+            - <span class="status-aberto">🟣 Situação Saldo = Aberto</span> — apenas a coluna **Situação Saldo** em roxo
+
+            Assim você vê ao mesmo tempo: status da conferência MOTZ×ATUA + pendência de saldo.
+            """, unsafe_allow_html=True)
+
+        # Export dos filtrados (todas as colunas, sem depender do que está visível)
+        csv = df_f.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "⬇️ Baixar tabela filtrada (CSV · todas as colunas)",
+            csv,
+            f"conciliacao_filtrado_{datetime.now().strftime('%Y-%m-%d')}.csv",
+            "text/csv",
+        )
+
+    else:
+        # Tela inicial sem dados
+        st.info(
+            "👆 **Comece subindo os 3 arquivos** (PDFs Repom, MOTZ XLSX, ATUA XLS) e clique em "
+            "**Rodar conciliação**. Ou use **Carregar XLSX pronto** se você já tem a planilha consolidada gerada.",
+            icon="📤",
+        )
+
+        with st.expander("ℹ️ Sobre esta ferramenta"):
+            st.markdown("""
+            Este aplicativo executa a skill `conciliacao-motz` diretamente no servidor, fazendo o cruzamento entre três fontes:
+
+            1. **PDFs Repom** — transferências bancárias (chave: Contrato)
+            2. **Arquivo MOTZ** — relatório de cartas-frete (chave: Nº formulário = Contrato do PDF)
+            3. **Cobrança ATUA** — API Contabilidade (chave: nr_nf = NF cliente do MOTZ)
+
+            **Saídas:**
+            - Planilha XLSX com formatação condicional (verde/vermelho/azul/amarelo/roxo)
+            - Dashboard interativo com KPIs, filtros, busca e **distribuição clicável**
+            - Exportação filtrada em CSV
+
+            **Novidades v3:**
+            - 🎨 Cores da skill aplicadas em toda a tabela (verde/vermelho/azul/amarelo/roxo)
+            - 👆 Cards de status e gráfico de pizza clicáveis (filtra a tabela)
+
+            **Limite:** 200 MB por arquivo (configurável no Streamlit).
+            """)
+
+
+# ============================================================
+# Aba: Franquia × Franqueadora (ADAPTA × PIANETTO)
+# ============================================================
+with tab_franquia:
+    if not FRANQUIA_DISPONIVEL:
+        st.error(f"Skill conciliacao_franquia indisponível: {_FRANQUIA_ERR}")
+        st.info("Adicione o arquivo scripts/conciliacao_franquia.py no repositório.")
+    else:
+        st.markdown("# Franquia × Franqueadora — ADAPTA × PIANETTO")
+        st.caption("PDF Pianetto (Título Débito × Carta Frete) × XLS Adapta (Cobrança ATUA) — cruzamento por nr_doc")
+
+        with st.container(border=True):
+            colf1, colf2 = st.columns(2)
+            with colf1:
+                if LOGO_PIANETTO:
+                    st.markdown(
+                        f'<div style="display:flex;align-items:center;justify-content:center;'
+                        f'height:60px;background:#FFFFFF;border-radius:8px;padding:6px;margin-bottom:8px;">'
+                        f'<img src="{LOGO_PIANETTO}" style="max-height:48px;max-width:100%;object-fit:contain;"></div>',
+                        unsafe_allow_html=True,
+                    )
+                st.markdown('<div style="text-align:center;font-weight:500;margin-bottom:4px;">PDF Pianetto (franquia)</div>', unsafe_allow_html=True)
+                pdf_pianetto = st.file_uploader(
+                    "Título Débito x Contrato de Frete",
+                    type=["pdf"],
+                    key="pdf_pianetto_fr",
+                    label_visibility="collapsed",
+                )
+                if pdf_pianetto:
+                    st.caption(f"✓ {pdf_pianetto.name}")
+
+            with colf2:
+                if LOGO_ATUA:
+                    st.markdown(
+                        f'<div style="display:flex;align-items:center;justify-content:center;'
+                        f'height:60px;background:#FFFFFF;border-radius:8px;padding:6px;margin-bottom:8px;">'
+                        f'<img src="{LOGO_ATUA}" style="max-height:48px;max-width:100%;object-fit:contain;"></div>',
+                        unsafe_allow_html=True,
+                    )
+                st.markdown('<div style="text-align:center;font-weight:500;margin-bottom:4px;">XLS Adapta (franqueadora)</div>', unsafe_allow_html=True)
+                xls_adapta = st.file_uploader(
+                    "Cobrança ATUA (.xls)",
+                    type=["xls", "xlsx"],
+                    key="xls_adapta_fr",
+                    label_visibility="collapsed",
+                )
+                if xls_adapta:
+                    st.caption(f"✓ {xls_adapta.name}")
+
+            col_btn, _ = st.columns([1, 3])
+            with col_btn:
+                processar_fr = st.button(
+                    "🔄 Processar conciliação",
+                    type="primary",
+                    use_container_width=True,
+                    disabled=not (pdf_pianetto and xls_adapta),
+                    key="btn_processar_franquia",
+                )
+
+        # Processar ao clicar
+        if processar_fr and pdf_pianetto and xls_adapta:
+            with st.spinner("Processando Franquia × Franqueadora..."):
+                try:
+                    pdf_bytes = pdf_pianetto.read()
+                    xls_bytes = xls_adapta.read()
+                    results, pianetto_data, adapta_data, csv_bytes, xlsx_bytes, n_csv = \
+                        rodar_conciliacao_franquia(pdf_bytes, xls_bytes)
+                    st.session_state["franquia_results"] = results
+                    st.session_state["franquia_pianetto"] = pianetto_data
+                    st.session_state["franquia_csv"] = csv_bytes
+                    st.session_state["franquia_xlsx"] = xlsx_bytes
+                    st.session_state["franquia_n_csv"] = n_csv
+                    st.success(f"✓ {len(results)} linhas processadas, {n_csv} no CSV de baixa")
+                except Exception as e:
+                    st.error(f"Erro ao processar: {e}")
+                    import traceback
+                    st.code(traceback.format_exc())
+
+        # Exibir resultados se disponíveis
+        if "franquia_results" in st.session_state:
+            results = st.session_state["franquia_results"]
+            pianetto_data = st.session_state["franquia_pianetto"]
+
+            st.divider()
+
+            # KPIs
+            total_pago = sum(r["Total Pago Pianetto"] for r in results)
+            total_quebra = sum(r["Quebra Pianetto"] for r in results)
+            total_bruto = sum(r["Valor Bruto Pianetto"] for r in results)
+            n_match = sum(1 for r in results if r["Status"] != "NÃO ENCONTRADO")
+            n_total = len(results)
+
+            k1, k2, k3, k4, k5 = st.columns(5)
+            with k1:
+                st.metric("Movimento Pianetto", pianetto_data.get("nr_movimento", "—"))
+                st.caption(f"Título: {pianetto_data.get('titulo_mov','—')}")
+            with k2:
+                st.metric("Linhas Match", f"{n_match}/{n_total}")
+            with k3:
+                st.metric("Total Bruto", fmt_rs(total_bruto))
+            with k4:
+                st.metric("Total Quebra", fmt_rs(total_quebra))
+            with k5:
+                st.metric("Total Pago (líquido)", fmt_rs(total_pago))
+
+            # Botão de download CSV
+            colb1, colb2 = st.columns([1, 1])
+            with colb1:
+                st.download_button(
+                    "⬇️ Baixar planilha_padrao.csv (importar no ATUA Pianetto)",
+                    data=st.session_state["franquia_csv"],
+                    file_name="planilha_padrao.csv",
                     mime="text/csv",
                     use_container_width=True,
                     type="primary",
-                    help="CSV com separador ;, decimal vírgula, encoding latin-1 — formato idêntico ao modelo do ATUA.",
                 )
-            else:
-                st.caption("⚠️ Nenhuma linha disponível pra baixa")
+            with colb2:
+                st.download_button(
+                    "📊 Baixar Excel visual",
+                    data=st.session_state["franquia_xlsx"],
+                    file_name=f"conciliacao_franquia_{datetime.now().strftime('%Y-%m-%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                )
 
-    st.info(
-        "**1 linha por transferência Repom** — igual à planilha da skill. "
-        "Se um contrato teve 2 transferências (ex: adto + saldo), aparece 2 vezes. "
-        "As colunas coloridas destacam divergências e saldo em aberto.",
-        icon="ℹ️",
-    )
+            st.divider()
 
-    # Filtros
-    with st.container(border=True):
-        datas_validas = df["Data Emissão"].dropna()
-        if len(datas_validas) > 0:
-            date_min = datas_validas.min().date()
-            date_max = datas_validas.max().date()
-        else:
-            date_min = date_max = datetime.now().date()
+            # Tabela de resultados (todas as linhas)
+            df_fr = pd.DataFrame(results)
+            st.markdown(f"### Conciliação detalhada ({len(df_fr)} linhas)")
 
-        # Folga de ±1 ano para o usuário poder escolher qualquer data
-        from datetime import date as _date
-        date_min_widget = _date(date_min.year - 1, 1, 1)
-        date_max_widget = _date(date_max.year + 1, 12, 31)
-
-        col_f1, col_f2, col_f3, col_f4 = st.columns([1, 1, 1, 2])
-        with col_f1:
-            date_from = st.date_input(
-                "De",
-                value=date_min,
-                min_value=date_min_widget,
-                max_value=date_max_widget,
-                format="DD/MM/YYYY",
-                key="date_from_input",
-            )
-        with col_f2:
-            date_to = st.date_input(
-                "Até",
-                value=date_max,
-                min_value=date_min_widget,
-                max_value=date_max_widget,
-                format="DD/MM/YYYY",
-                key="date_to_input",
-            )
-        with col_f3:
+            # Filtro de status
             status_filter = st.selectbox(
-                "Status",
-                ["Todos", "OK", "ATUA MAIOR", "ATUA MENOR", "NÃO ENCONTRADO", "Saldo aberto"],
-                key="status_dropdown",
+                "Filtrar por status:",
+                ["Todos", "OK", "ADAPTA MAIOR", "ADAPTA MENOR", "NÃO ENCONTRADO"],
+                key="filter_franquia_status",
             )
-        with col_f4:
-            busca = st.text_input(
-                "Buscar",
-                placeholder="contrato, CTRC, motorista, NFe...",
-                key="busca_input",
-            )
+            if status_filter != "Todos":
+                df_fr = df_fr[df_fr["Status"] == status_filter]
 
-    # Aplicar filtros de data
-    df_f = df.copy()
-    if date_from:
-        df_f = df_f[df_f["Data Emissão"].apply(lambda d: pd.isna(d) or d.date() >= date_from)]
-    if date_to:
-        df_f = df_f[df_f["Data Emissão"].apply(lambda d: pd.isna(d) or d.date() <= date_to)]
-
-    df_periodo = df_f.copy()  # para KPIs do período (sem filtro de status)
-    # v4.9: marca linhas com mesmo nr_titulo ATUA (ATUA MAIOR) — origem = mais antiga
-    df_periodo = marcar_duplicacoes_atua(df_periodo)
-    df_f = marcar_duplicacoes_atua(df_f)
-
-    # ============================================================
-    # Combinar filtro do dropdown + filtro clicável
-    # Regra: se o usuário clicou num card/fatia, isso tem prioridade sobre o dropdown "Todos"
-    # Se o dropdown ≠ "Todos" E clicou num card, o clique vence (sincroniza)
-    # ============================================================
-    filtro_ativo = st.session_state.get("status_click")
-    if status_filter != "Todos":
-        filtro_ativo = status_filter  # dropdown vence se não for "Todos"
-
-    if filtro_ativo == "Saldo aberto":
-        df_f = df_f[df_f["Situação Saldo"] == "Aberto"]
-    elif filtro_ativo and filtro_ativo != "Todos":
-        df_f = df_f[df_f["Status"] == filtro_ativo]
-
-    if busca:
-        b = busca.lower()
-        mask = (
-            df_f["Contrato"].astype(str).str.lower().str.contains(b, na=False) |
-            df_f["nr_titulo ATUA"].astype(str).str.lower().str.contains(b, na=False) |
-            df_f["nr_ctrc ATUA"].astype(str).str.lower().str.contains(b, na=False) |
-            df_f["Motorista"].astype(str).str.lower().str.contains(b, na=False) |
-            df_f["NFe"].astype(str).str.lower().str.contains(b, na=False) |
-            df_f["Cliente"].astype(str).str.lower().str.contains(b, na=False) |
-            df_f["Nº Carta Frete"].astype(str).str.lower().str.contains(b, na=False) |
-            df_f["Nº Romaneio"].astype(str).str.lower().str.contains(b, na=False)
-        )
-        df_f = df_f[mask]
-
-    # ============================================================
-    # KPIs (sobre df_periodo, sem filtro de status)
-    # Deduplicar por contrato para somas (Frete/ATUA se repetem em 2+ transferências)
-    # ============================================================
-    total_linhas = len(df_periodo)
-    df_unicos = df_periodo.drop_duplicates(subset=["Contrato"]) if total_linhas > 0 else df_periodo
-    total = len(df_unicos)  # nº de contratos únicos
-
-    ok_n = (df_unicos["Status"] == "OK").sum()
-    maior_n = (df_unicos["Status"] == "ATUA MAIOR").sum()
-    menor_n = (df_unicos["Status"] == "ATUA MENOR").sum()
-    ne_n = (df_unicos["Status"] == "NÃO ENCONTRADO").sum()
-    aberto_n = (df_unicos["Situação Saldo"] == "Aberto").sum()
-
-    soma_motz = df_unicos["Vlr. Frete Líquido"].fillna(0).sum()
-    # v4.9: na soma do vl_total ATUA, exclui as linhas marcadas como duplicadas
-    # (mesmo nr_titulo ATUA em + de 1 linha Repom → conta só a origem)
-    if "_atua_duplicado" in df_unicos.columns:
-        soma_atua = df_unicos[df_unicos["_atua_duplicado"] != True]["vl_total ATUA"].fillna(0).sum()
-    else:
-        soma_atua = df_unicos["vl_total ATUA"].fillna(0).sum()
-    # Valor Transferido: SOMA TODAS as linhas (cada linha = 1 transferência)
-    soma_transf = df_periodo["Valor Transferido"].fillna(0).sum()
-    contratos_com_transf = df_periodo[df_periodo["Valor Transferido"].fillna(0) > 0]["Contrato"].nunique()
-    soma_saldo_aberto = df_unicos[df_unicos["Situação Saldo"] == "Aberto"]["Vlr. Saldo"].fillna(0).sum()
-
-    indice = (ok_n / total * 100) if total else 0
-
-    col_k1, col_k2, col_k3, col_k4, col_k5 = st.columns(5)
-    with col_k1:
-        st.metric("Índice conciliação", f"{indice:.1f}%".replace(".", ","), f"{ok_n} de {total} OK")
-    with col_k2:
-        st.metric("Soma MOTZ", fmt_mi(soma_motz), help="Frete líquido (sem duplicar por transferência)")
-    with col_k3:
-        diff = soma_atua - soma_motz
-        st.metric("Soma ATUA", fmt_mi(soma_atua), delta=fmt_mi(diff), delta_color="inverse")
-    with col_k4:
-        st.metric("Transferido Repom", fmt_mi(soma_transf), f"{contratos_com_transf} contratos c/ PDF")
-    with col_k5:
-        st.metric("Saldo em aberto", fmt_mi(soma_saldo_aberto), f"{aberto_n} contratos")
-
-    # ============================================================
-    # Distribuição clicável (cards + gráfico de pizza)
-    # ============================================================
-    st.markdown("### Distribuição por status")
-    st.caption("👆 Clique em um card ou numa fatia do gráfico para filtrar a tabela. Clique de novo para limpar.")
-
-    def pct(n):
-        return f"{n/total*100:.1f}%".replace(".", ",") if total else "0,0%"
-
-    # ---------- Cards clicáveis (5 colunas) ----------
-    cards = [
-        ("OK",             ok_n,     "card-ok",      "🟢"),
-        ("ATUA MAIOR",     maior_n,  "card-maior",   "🔴"),
-        ("ATUA MENOR",     menor_n,  "card-menor",   "🔵"),
-        ("NÃO ENCONTRADO", ne_n,     "card-ne",      "🟡"),
-        ("Saldo aberto",   aberto_n, "card-aberto",  "🟣"),
-    ]
-
-    cols_cards = st.columns(5)
-    filtro_atual_clique = st.session_state.get("status_click")
-
-    for idx, (label, n, css_class, emoji) in enumerate(cards):
-        with cols_cards[idx]:
-            ativo = (filtro_atual_clique == label)
-            classe_final = f"{css_class} card-active" if ativo else css_class
-            st.markdown(f'<div class="{classe_final}">', unsafe_allow_html=True)
-            if st.button(
-                f"{emoji}  **{label}**\n\n{n} · {pct(n)}",
-                key=f"card_{label}",
-                use_container_width=True,
-            ):
-                # Toggle: se já tá selecionado, desseleciona
-                if st.session_state.get("status_click") == label:
-                    st.session_state["status_click"] = None
+            # Estilização condicional
+            def _colorir_fr(row):
+                status = row.get("Status", "")
+                if status == "OK":
+                    bg = "#1F4D1A"; fg = "#C3E8A8"
+                elif status == "ADAPTA MAIOR":
+                    bg = "#5A1A1A"; fg = "#F5B8B8"
+                elif status == "ADAPTA MENOR":
+                    bg = "#1A3A5A"; fg = "#B8D8F5"
+                elif status == "NÃO ENCONTRADO":
+                    bg = "#5A3F0F"; fg = "#F5DB9E"
                 else:
-                    st.session_state["status_click"] = label
-                st.rerun()
-            st.markdown('</div>', unsafe_allow_html=True)
+                    return [""] * len(row)
+                return [f"background-color: {bg}; color: {fg}"] * len(row)
 
-    # Aviso de filtro ativo
-    if filtro_atual_clique and status_filter == "Todos":
-        st.markdown(
-            f'<div class="filter-hint">🎯 Filtro ativo pelo card: <b>{filtro_atual_clique}</b> '
-            f'· Exibindo {len(df_f)} de {total} contratos. Clique no mesmo card para limpar.</div>',
-            unsafe_allow_html=True,
-        )
+            colunas_exibir = [
+                "Nr. Doc. (Pianetto)", "Tipo", "Placa", "Motorista", "Data Emissão CF",
+                "Valor Bruto Pianetto", "Quebra Pianetto", "Total Pago Pianetto",
+                "nr_titulo Adapta", "nr_ctrc Adapta", "vl_total Adapta",
+                "Diferença Adapta×Pianetto", "Status",
+            ]
+            df_exib = df_fr[colunas_exibir].copy()
+            for c in ["Valor Bruto Pianetto", "Quebra Pianetto", "Total Pago Pianetto",
+                       "vl_total Adapta", "Diferença Adapta×Pianetto"]:
+                df_exib[c] = df_exib[c].apply(lambda v: fmt_rs(v) if v is not None else "—")
 
-    # ---------- Gráfico de pizza (abaixo dos cards) ----------
-    col_g1, col_g2 = st.columns([1, 1])
+            styled = df_exib.style.apply(_colorir_fr, axis=1)
+            st.dataframe(styled, use_container_width=True, height=600, hide_index=True)
 
-    with col_g1:
-        st.markdown("**Distribuição visual**")
-        dist_data = pd.DataFrame([
-            {"Status": "OK",             "Qtd": ok_n,    "Cor": COLORS["OK"]["plot"]},
-            {"Status": "ATUA MAIOR",     "Qtd": maior_n, "Cor": COLORS["ATUA MAIOR"]["plot"]},
-            {"Status": "ATUA MENOR",     "Qtd": menor_n, "Cor": COLORS["ATUA MENOR"]["plot"]},
-            {"Status": "NÃO ENCONTRADO", "Qtd": ne_n,    "Cor": COLORS["NAO ENCONTRADO"]["plot"]},
-            {"Status": "Saldo aberto",   "Qtd": aberto_n,"Cor": COLORS["SALDO ABERTO"]["plot"]},
-        ])
-        dist_data = dist_data[dist_data["Qtd"] > 0]  # não plota fatias vazias
-
-        if len(dist_data) > 0:
-            fig = px.pie(
-                dist_data,
-                values="Qtd",
-                names="Status",
-                color="Status",
-                color_discrete_map={r["Status"]: r["Cor"] for _, r in dist_data.iterrows()},
-                hole=0.4,
-            )
-            fig.update_traces(
-                textposition="inside",
-                textinfo="percent+label",
-                hovertemplate="<b>%{label}</b><br>%{value} contratos<br>%{percent}<extra></extra>",
-                pull=[0.08 if s == filtro_atual_clique else 0 for s in dist_data["Status"]],
-            )
-            fig.update_layout(
-                height=280,
-                margin=dict(t=10, b=10, l=10, r=10),
-                showlegend=True,
-                legend=dict(orientation="v", yanchor="middle", y=0.5, xanchor="left", x=1.05, font=dict(size=11, color="#EAEAEA")),
-                paper_bgcolor="#1A1A1A",
-                plot_bgcolor="#1A1A1A",
-                font=dict(color="#EAEAEA"),
-            )
-            # Eventos de clique no gráfico
-            evento = st.plotly_chart(fig, use_container_width=True, on_select="rerun", key="pie_chart")
-            if evento and evento.get("selection") and evento["selection"].get("points"):
-                ponto = evento["selection"]["points"][0]
-                status_clicado = ponto.get("label")
-                if status_clicado:
-                    # Toggle
-                    if st.session_state.get("status_click") == status_clicado:
-                        st.session_state["status_click"] = None
-                    else:
-                        st.session_state["status_click"] = status_clicado
-                    st.rerun()
-        else:
-            st.caption("Sem dados para plotar")
-
-    with col_g2:
-        st.markdown("**Frete líquido emitido por dia**")
-        df_chart = df_unicos.dropna(subset=["Data Emissão"]).copy()
-        if len(df_chart) > 0:
-            df_chart["Dia"] = df_chart["Data Emissão"].dt.date
-            daily = df_chart.groupby("Dia")["Vlr. Frete Líquido"].sum().reset_index()
-            daily.columns = ["Data", "Frete Líquido"]
-            st.bar_chart(daily, x="Data", y="Frete Líquido", height=280, color="#378ADD")
-        else:
-            st.caption("Sem dados de data para o período")
-
-    # ============================================================
-    # Tabela (com cores por linha)
-    # ============================================================
-    st.markdown(f"**Transferências · {len(df_f)} linhas exibidas** " +
-                (f"(filtro: {filtro_ativo})" if filtro_ativo and filtro_ativo != "Todos" else ""))
-
-    # ---- Multi-select para escolher quais colunas exibir ----
-    # Seleção padrão (mais usadas) — usuário pode expandir
-    PADRAO_VISIVEIS = [
-        "Cliente", "Contrato", "NFe", "nr_titulo ATUA", "Motorista",
-        "Data Emissão", "Vlr. Frete Líquido", "Vlr. Saldo",
-        "vl_total ATUA", "Diferença MOTZ×ATUA", "Status",
-        "Data Transferência", "Valor Transferido",
-        "Situação Adto", "Situação Saldo",
-    ]
-
-    # Estratégia: usar chave dinâmica para permitir reset pelos botões
-    if "colunas_default" not in st.session_state:
-        st.session_state["colunas_default"] = PADRAO_VISIVEIS
-    if "colunas_version" not in st.session_state:
-        st.session_state["colunas_version"] = 0
-
-    with st.expander("⚙️ Escolher colunas visíveis", expanded=False):
-        col_rst1, col_rst2, _ = st.columns([1, 1, 3])
-        with col_rst1:
-            if st.button("✅ Mostrar todas", key="btn_todas"):
-                st.session_state["colunas_default"] = list(COLUNAS_OFICIAIS)
-                st.session_state["colunas_version"] += 1
-                st.rerun()
-        with col_rst2:
-            if st.button("↺ Padrão", key="btn_padrao"):
-                st.session_state["colunas_default"] = PADRAO_VISIVEIS
-                st.session_state["colunas_version"] += 1
-                st.rerun()
-
-        colunas_escolhidas = st.multiselect(
-            "Selecione as colunas que deseja ver (todas as 22 disponíveis):",
-            options=COLUNAS_OFICIAIS,
-            default=st.session_state["colunas_default"],
-            key=f"colunas_multiselect_v{st.session_state['colunas_version']}",
-        )
-
-    if not colunas_escolhidas:
-        colunas_escolhidas = PADRAO_VISIVEIS
-
-    # Ordenar colunas escolhidas na ORDEM OFICIAL (não na ordem de seleção)
-    colunas_ordenadas = [c for c in COLUNAS_OFICIAIS if c in colunas_escolhidas]
-
-    # Preparar df_show
-    df_show = df_f.copy().sort_values(
-        ["Data Emissão", "Contrato"],
-        ascending=[False, True],
-        na_position="last",
-    )
-
-    # Construir view da tabela
-    df_tabela = df_show[colunas_ordenadas].reset_index(drop=True)
-
-    # Formatadores
-    formatadores = {}
-    for col in colunas_ordenadas:
-        if col in COLUNAS_VALOR:
-            formatadores[col] = lambda v: (
-                f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-                if pd.notna(v) and v != 0 else ("R$ 0,00" if v == 0 else "—")
-            )
-        elif col in COLUNAS_DATA:
-            formatadores[col] = lambda d: d.strftime("%d/%m/%Y") if pd.notna(d) and isinstance(d, datetime) else "—"
-
-    # Aplicar cores + formatação
-    styler = colorir_linhas_tabela(df_tabela)
-    if formatadores:
-        styler = styler.format(formatadores)
-
-    st.dataframe(styler, use_container_width=True, hide_index=True, height=520)
-
-    # Legenda de cores
-    with st.expander("🎨 Legenda de cores", expanded=False):
-        st.markdown(f"""
-        As cores seguem **exatamente** a planilha MOTZ original (célula por célula):
-
-        - <span class="status-ok">🟢 OK</span> — colunas **Status**, **Diferença MOTZ×ATUA** e **Vlr. Saldo** em verde
-        - <span class="status-maior">🔴 ATUA MAIOR > R$100</span> — mesmas colunas em vermelho (diferença crítica)
-        - <span class="status-menor">🔵 ATUA MAIOR até R$100 / ATUA MENOR</span> — mesmas colunas em azul (diferença pequena)
-        - <span class="status-ne">🟡 NÃO ENCONTRADO</span> — mesmas colunas em amarelo
-        - <span class="status-aberto">🟣 Situação Saldo = Aberto</span> — apenas a coluna **Situação Saldo** em roxo
-
-        Assim você vê ao mesmo tempo: status da conferência MOTZ×ATUA + pendência de saldo.
-        """, unsafe_allow_html=True)
-
-    # Export dos filtrados (todas as colunas, sem depender do que está visível)
-    csv = df_f.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        "⬇️ Baixar tabela filtrada (CSV · todas as colunas)",
-        csv,
-        f"conciliacao_filtrado_{datetime.now().strftime('%Y-%m-%d')}.csv",
-        "text/csv",
-    )
-
-else:
-    # Tela inicial sem dados
-    st.info(
-        "👆 **Comece subindo os 3 arquivos** (PDFs Repom, MOTZ XLSX, ATUA XLS) e clique em "
-        "**Rodar conciliação**. Ou use **Carregar XLSX pronto** se você já tem a planilha consolidada gerada.",
-        icon="📤",
-    )
-
-    with st.expander("ℹ️ Sobre esta ferramenta"):
-        st.markdown("""
-        Este aplicativo executa a skill `conciliacao-motz` diretamente no servidor, fazendo o cruzamento entre três fontes:
-
-        1. **PDFs Repom** — transferências bancárias (chave: Contrato)
-        2. **Arquivo MOTZ** — relatório de cartas-frete (chave: Nº formulário = Contrato do PDF)
-        3. **Cobrança ATUA** — API Contabilidade (chave: nr_nf = NF cliente do MOTZ)
-
-        **Saídas:**
-        - Planilha XLSX com formatação condicional (verde/vermelho/azul/amarelo/roxo)
-        - Dashboard interativo com KPIs, filtros, busca e **distribuição clicável**
-        - Exportação filtrada em CSV
-
-        **Novidades v3:**
-        - 🎨 Cores da skill aplicadas em toda a tabela (verde/vermelho/azul/amarelo/roxo)
-        - 👆 Cards de status e gráfico de pizza clicáveis (filtra a tabela)
-
-        **Limite:** 200 MB por arquivo (configurável no Streamlit).
-        """)
 
 # Footer
 st.divider()
-st.caption("Dashboard Conciliação MOTZ · skill conciliacao-motz · Streamlit Cloud · v4.4.5 (nome planilha_padrao .csv)")
+st.caption("Dashboards de Conciliação · v5.0 · MOTZ + Franquia (ADAPTA × PIANETTO) · Streamlit Cloud")
